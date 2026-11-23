@@ -375,13 +375,56 @@ class ClaudeConfig(_Section):
         return self
 
 
+class OpenAICompatibleConfig(_Section):
+    """Her brain on any OpenAI-compatible chat API (``brain/openai_compat.py``) when ``brain.provider`` is
+    ``openai_compatible``: OpenAI, Gemini, Grok, Mistral, DeepSeek, Groq, OpenRouter, or a local server (Ollama,
+    LM Studio, llama.cpp). What only Claude has (its web tools, prompt cache warm-up, her quick voice) is off there."""
+
+    # e.g. https://api.openai.com/v1, https://generativelanguage.googleapis.com/v1beta/openai, https://api.x.ai/v1,
+    # https://api.mistral.ai/v1, https://api.deepseek.com/v1, https://api.groq.com/openai/v1,
+    # https://openrouter.ai/api/v1, http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio)
+    base_url: str = "https://api.openai.com/v1"
+    api_key_env: str = "OPENAI_API_KEY"  # the environment variable (.env) holding the key; "" for a server with none
+    model: str = ""  # the model's name on that server, e.g. gpt-5.1, gemini-3-pro, grok-4, qwen3:14b
+    max_turns: int = Field(80, ge=1)  # steps (tool round trips) per request, as brain.claude.max_turns
+    vision: bool = True  # send pictures (the screen, what was circled); off for a model that can't see
+    temperature: float | None = Field(None, ge=0, le=2)  # null = the server's default
+    max_tokens: int | None = Field(None, ge=1)  # per reply; null = the server's default
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None  # for reasoning models that take it
+    # More tools than this in one request are refused by most of these APIs (OpenAI: 128). Her ~250 are more, so
+    # with tools_on_demand always_loaded_tools go in full and the rest are listed by name in a load_tools tool that
+    # loads them when a request needs them.
+    max_tools: int = Field(128, ge=2)
+    tools_on_demand: bool = True
+    always_loaded_tools: list[str] | None = None  # null = brain.claude.always_loaded_tools
+    # The server said the conversation grew past this: the oldest exchanges are dropped, whole.
+    context_limit_tokens: int = Field(90000, ge=4000)
+    stream_usage: bool = True  # ask for token counts with the stream (stream_options); off for a server refusing it
+    connect_timeout_s: float = Field(30.0, gt=0)
+    request_timeout_s: float = Field(300.0, gt=0)
+    stall_timeout_s: float = Field(120.0, gt=0)  # silent this long mid-reply: give up on the turn
+    extra_headers: dict[str, str] = Field(default_factory=dict)  # e.g. OpenRouter's HTTP-Referer / X-Title
+    judge_model: str = ""  # the eval's judge on this server when there's no Claude; "" = model
+
+
 class BrainConfig(_Section):
-    provider: str = "claude"
+    # "claude" (Claude Code, your subscription) | "openai_compatible" (any OpenAI-style chat API: brain.openai_compatible)
+    provider: Literal["claude", "openai_compatible"] = "claude"
     # Who answers your turns (``core/engines.py``): "auto", the local brain's routing as ``local_brain.mode`` sets it;
     # "claude", only Claude (the local brain never answers, not even while Claude is down); "local", only the local
     # brain (it says plainly what it can't do; it never hands a turn to Claude). Changed live.
     answers: Literal["auto", "claude", "local"] = "auto"
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
+    openai_compatible: OpenAICompatibleConfig = Field(default_factory=OpenAICompatibleConfig)
+
+    @property
+    def is_claude(self) -> bool:
+        return self.provider == "claude"
+
+    @property
+    def model(self) -> str:
+        """The conversation's model, whichever provider runs it."""
+        return self.claude.model if self.is_claude else self.openai_compatible.model
 
 
 class FishAudioConfig(_Section):
@@ -1238,7 +1281,7 @@ class EmotionConfig(_Section):
 
 
 class HiveConfig(_Section):
-    """The hivemind (src/octavia/hive/): signed updates from the maintainer, and fixes, lessons and test cases this
+    """The ETHER (src/octavia/hive/): signed updates from the maintainer, and fixes, lessons and test cases this
     install proposes back, scrubbed and only with the user's yes. Off unless turned on."""
 
     # Where updates are published: an https address or a folder holding channel.json and channel.json.sig ("" = none).

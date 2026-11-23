@@ -49,11 +49,14 @@ const WHISPERS = {
   reach: 'reach...',
   ready: 'almost...',
   alive: '',
+  waking: '',
 };
 
 // ---------------------------------------------------------------- steps
 const dots = $('#dots');
-for (let i = 1; i < steps.length - 1; i += 1) dots.appendChild(document.createElement('li'));
+const CHOICES = steps.filter((step) => !['intro', 'alive', 'waking'].includes(step.dataset.step)).length;
+for (let i = 0; i < CHOICES; i += 1) dots.appendChild(document.createElement('li'));
+const indexOf = (name) => steps.findIndex((step) => step.dataset.step === name);
 
 function show(index) {
   state.at = Math.max(0, Math.min(steps.length - 1, index));
@@ -62,7 +65,7 @@ function show(index) {
   });
   const step = steps[state.at];
   [...dots.children].forEach((dot, i) => dot.classList.toggle('on', i < state.at));
-  form(state.at / (steps.length - 2));
+  form(Math.min(1, state.at / CHOICES));
   orb({ type: 'state', state: step.dataset.mood || 'idle' });
   if (state.at > 0) orb({ type: 'moment', name: 'step' });
   whisper(WHISPERS[step.dataset.step]);
@@ -91,6 +94,64 @@ document.addEventListener('change', (event) => {
     });
   }
 });
+
+// ---------------------------------------------------------------- dropdowns
+// Each <select> stays as the value holder, hidden; a button and a list in the app's look stand in for it.
+function dress(select) {
+  if (select.dataset.dressed) return refresh(select);
+  select.dataset.dressed = '1';
+  select.classList.add('native');
+  const box = document.createElement('div');
+  box.className = 'dropdown';
+  box.innerHTML = '<button type="button" class="pick"><span></span><i aria-hidden="true"></i></button><ul class="list" role="listbox" hidden></ul>';
+  select.after(box);
+  const button = box.querySelector('.pick');
+  const list = box.querySelector('.list');
+  const close = () => {
+    list.hidden = true;
+    box.classList.remove('open');
+  };
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    const opening = list.hidden;
+    $$('.dropdown .list').forEach((l) => (l.hidden = true));
+    $$('.dropdown').forEach((d) => d.classList.remove('open'));
+    if (!opening) return;
+    list.hidden = false;
+    box.classList.add('open');
+    list.querySelector('[aria-selected=true]')?.scrollIntoView({ block: 'nearest' });
+  });
+  list.addEventListener('click', (event) => {
+    const li = event.target.closest('li');
+    if (!li) return;
+    select.value = li.dataset.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    refresh(select);
+    close();
+  });
+  document.addEventListener('click', (event) => {
+    if (!box.contains(event.target)) close();
+  });
+  select.addEventListener('change', () => refresh(select));
+  refresh(select);
+}
+
+function refresh(select) {
+  const box = select.nextElementSibling;
+  if (!box?.classList.contains('dropdown')) return;
+  box.querySelector('.pick span').textContent = select.selectedOptions[0]?.textContent || '';
+  const list = box.querySelector('.list');
+  list.innerHTML = '';
+  for (const option of select.options) {
+    const li = document.createElement('li');
+    li.textContent = option.textContent;
+    li.dataset.value = option.value;
+    li.setAttribute('aria-selected', String(option.selected));
+    list.appendChild(li);
+  }
+}
+
+$$('select').forEach(dress);
 
 // ---------------------------------------------------------------- the model
 function fillSelect(select, names, chosen) {
@@ -205,6 +266,14 @@ $('#find').addEventListener('click', () => {
   host.send({ type: 'geocode', place: town });
 });
 
+$('#other-model').addEventListener('change', () => {
+  const m = state.model?.models?.[Number($('#other-model').value) || 0];
+  if (!m) return;
+  $('#other-url-field').hidden = Boolean(m.base_url);
+  $('#other-key-field').hidden = !m.key_env;
+  $('#other-name').value = m.model || '';
+});
+
 $('#name').addEventListener('input', () => {
   $('#wake').value = $('#name').value.trim().toLowerCase();
 });
@@ -221,7 +290,17 @@ function choices() {
     node[parts.at(-1)] = value;
   };
   const brain = document.querySelector('input[name=brain]:checked').value;
-  set('brain.claude.auth', brain);
+  if (brain === 'other') {
+    const m = state.model.models[Number($('#other-model').value) || 0];
+    set('brain.provider', 'openai_compatible');
+    set('brain.openai_compatible.base_url', m.base_url || val('#other-url'));
+    set('brain.openai_compatible.api_key_env', m.key_env);
+    if (val('#other-name')) set('brain.openai_compatible.model', val('#other-name'));
+    if (m.key_env && val('#other-key')) env[m.key_env] = val('#other-key');
+  } else {
+    set('brain.provider', 'claude');
+    set('brain.claude.auth', brain);
+  }
   if (brain === 'api_key' && val('#anthropic')) env.ANTHROPIC_API_KEY = val('#anthropic');
   if (val('#mic')) set('audio.input_device', val('#mic'));
   if (val('#speaker')) set('audio.output_device', val('#speaker'));
@@ -269,7 +348,31 @@ $('#sign-in').addEventListener('click', () => {
   host.send({ type: 'sign-in' });
 });
 
-$('#finish').addEventListener('click', () => host.send({ type: 'done' }));
+$('#finish').addEventListener('click', () => {
+  // OCTAVIA itself starts now: the setup process launches it and says when it's up (or that it couldn't).
+  show(indexOf('waking'));
+  orb({ type: 'state', state: 'thinking' });
+  wakingClock();
+  host.send({ type: 'done' });
+});
+
+let wakingStarted = 0;
+let wakingTimer = null;
+function wakingClock() {
+  wakingStarted = performance.now();
+  const tick = () => {
+    const s = (performance.now() - wakingStarted) / 1000;
+    for (const li of $$('#waking-steps li')) {
+      const at = Number(li.dataset.at);
+      li.classList.toggle('done', s >= at + 6 && li.nextElementSibling && s >= Number(li.nextElementSibling.dataset.at));
+      li.classList.toggle('now', s >= at && !li.classList.contains('done'));
+    }
+    if (s > 90) $('#waking-note').textContent = 'Still going. The first start can take a few minutes on some PCs.';
+    orb({ type: 'mouth', level: 0.15 + 0.1 * Math.sin(s * 3) });
+  };
+  wakingTimer = setInterval(tick, 250);
+  tick();
+}
 
 // ---------------------------------------------------------------- from the setup process
 const handlers = {
@@ -277,8 +380,15 @@ const handlers = {
     state.model = msg;
     fillSelect($('#mic'), msg.devices.inputs || [], null);
     fillSelect($('#speaker'), msg.devices.outputs || [], null);
+    dress($('#mic'));
+    dress($('#speaker'));
     voiceCards();
     hardware(msg.hardware || {});
+    const models = $('#other-model');
+    models.innerHTML = '';
+    (msg.models || []).forEach((m, i) => models.add(new Option(m.name, String(i))));
+    models.dispatchEvent(new Event('change'));
+    dress(models);
     if (msg.name) {
       $('#name').value = msg.name;
       $('#wake').value = msg.wake || msg.name.toLowerCase();
@@ -331,11 +441,27 @@ const handlers = {
     $('#alive-title').textContent = `${name} is awake.`;
     $('#alive-text').textContent = `Say "${$('#wake').value.trim() || name.toLowerCase()}" to start talking.`;
     $('#sign-in').hidden = !msg.sign_in;
-    show(steps.length - 1);
+    show(indexOf('alive'));
     form(1);
     orb({ type: 'moment', name: 'rainboom' });
     orb({ type: 'emotion', emotion: 'happy', intensity: 1, hold: 6 });
     if (state.previews[state.voice]) play(state.voice, state.previews[state.voice]);
+  },
+  awake(msg) {
+    clearInterval(wakingTimer);
+    orb({ type: 'mouth', level: 0 });
+    if (msg.ok) {
+      $$('#waking-steps li').forEach((li) => li.classList.add('done'));
+      $('#waking-title').textContent = 'Awake.';
+      $('#waking-note').textContent = `Say "${$('#wake').value.trim() || 'octavia'}" whenever you're ready.`;
+      form(1);
+      orb({ type: 'moment', name: 'rainboom' });
+      orb({ type: 'emotion', emotion: 'happy', intensity: 1, hold: 4 });
+    } else {
+      $('#waking-title').textContent = "It didn't start";
+      $('#waking-note').textContent = msg.message || 'Start it from the Start menu: OCTAVIA.';
+      orb({ type: 'state', state: 'idle' });
+    }
   },
   'signed-in'(msg) {
     $('#sign-in').disabled = false;

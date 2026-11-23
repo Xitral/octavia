@@ -558,7 +558,7 @@ def _cli_probe(config: Any) -> Probe | None:
     settings, whose report ``observe`` records. None when she isn't on the subscription (an API key has no such
     limits to read)."""
     claude = config.brain.claude
-    if claude.auth != "subscription":
+    if claude.auth != "subscription" or config.brain.provider != "claude":
         return None
 
     async def probe() -> None:

@@ -28,7 +28,21 @@ CATEGORIES = ("question", "request", "other")
 SEARCHING = "search"
 # Said when a turn has gone a long while without a word (``Assistant._still_working``).
 WORKING = "working"
-_LISTS = (*CATEGORIES, SEARCHING, WORKING)
+# Said when she starts writing out a call that takes her long to write, before any word of her answer
+# (``Assistant._say_starting``): the user heard "On it." and then nothing until the call was written, had run, and
+# she'd answered. Measured on 167 spoken turns with tools (2026-11-09 to 11-22): a new panel took her 11.5 s to
+# write (25 calls), an explainer 13.2 s, a screen task's brief 7.6 s (20 calls), an objective 11.3 s; no other call
+# took 5 s. Her answer came 12.1 s after the last word in the 112 turns where a call came before any word, 4.6 s in
+# the 55 where she spoke first.
+DRAWING = "panel"
+SETTING_UP = "task"
+SLOW_TO_WRITE = {
+    "show_visual": DRAWING,
+    "explain": DRAWING,
+    "start_screen_task": SETTING_UP,
+    "start_objective": SETTING_UP,
+}
+_LISTS = (*CATEGORIES, SEARCHING, WORKING, DRAWING, SETTING_UP)
 
 _QUESTION_STARTS = {
     "what", "whats", "what's", "when", "where", "wheres", "where's", "who", "whos", "who's", "whom", "whose",
@@ -101,6 +115,7 @@ class Acknowledger:
         self.cache = cache
         self._rng = rng or random.Random()
         self._last: str | None = None
+        self._last_start: str | None = None  # the last line said as a slow call began (``starting``)
         cache.add(p for category in _LISTS for p in phrases.get(category, []))
 
     @property
@@ -134,6 +149,20 @@ class Acknowledger:
         if not options:
             return None
         phrase = self._rng.choice(list(options))
+        return phrase, options[phrase]
+
+    def starting(self, tool: str) -> tuple[str, np.ndarray] | None:
+        """A phrase for the start of a call that takes long to write ("Putting it on a panel." for a new panel), and
+        its audio. None for any other call, or when none of that call's lines is ready: no stand-in from the other
+        lists (it says what she's doing, and "Okay." a second time wouldn't)."""
+        options = self._playable(SLOW_TO_WRITE.get(tool, ""))
+        if not options:
+            return None
+        names = list(options)
+        if len(names) > 1 and self._last_start in names:
+            names.remove(self._last_start)  # not the same line twice in a row
+        phrase = self._rng.choice(names)
+        self._last_start = phrase
         return phrase, options[phrase]
 
     def searching(self) -> tuple[str, np.ndarray] | None:

@@ -115,11 +115,15 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 Push-Location $InstallDir
 try {
-    Native { uv sync --frozen }
+    # uv's own output goes to a log: when an antivirus blocks its downloads it prints alarming errors before the
+    # calm fallback below takes over.
+    $UvLog = Join-Path $env:TEMP "OCTAVIA-Setup-uv.log"
+    Say "Installing with uv (log: $UvLog)..."
+    Native { cmd /c "uv sync --frozen > `"$UvLog`" 2>&1" }
     if ($LASTEXITCODE -ne 0) {
         # uv couldn't download (an antivirus blocking uv.exe's connections, say: "os error 10013"). Python's own pip
         # usually still can: the same locked versions, from requirements.lock.txt.
-        Say "uv couldn't download what OCTAVIA needs (an antivirus may be blocking it). Using Python's pip instead."
+        Say "uv couldn't download (often an antivirus blocking it). No problem: switching to Python's pip."
         Install-WithPip
     }
 
@@ -171,8 +175,9 @@ Step 6 "Forming OCTAVIA"
 Push-Location $InstallDir
 try {
     Native { & .venv\Scripts\python.exe -m octavia welcome --window }
+    $Formed = $LASTEXITCODE
 } finally { Pop-Location }
-Start-Process -FilePath $Launcher -WorkingDirectory $InstallDir
+if ($Formed -ne 0) { Start-Process -FilePath $Launcher -WorkingDirectory $InstallDir }   # 0: the setup started it
 Write-Host "`n  OCTAVIA is installed. Say its name to start talking.`n" -ForegroundColor Cyan
 } catch {
     $Failed = $true

@@ -34,6 +34,21 @@ search:
   - "Searching the web."
   - "Checking online."
 
+# When she starts writing a new panel or an explainer before saying a word of her
+# answer: writing one out takes her about ten seconds, so you hear what's coming.
+# Say what she's doing, never that it's up.
+panel:
+  - "Putting it on a panel."
+  - "Let me draw that up."
+  - "Drawing it up."
+
+# The same for a screen task or an objective she's setting up (its instructions
+# take her a while to write).
+task:
+  - "Setting that up."
+  - "Let me set that up."
+  - "Getting that started."
+
 # When she's been working for a while without a word (a long command, writing a
 # file, a screen task), so a two-minute wait doesn't sound like she hung.
 working:

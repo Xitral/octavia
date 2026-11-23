@@ -92,6 +92,18 @@ KEYS: tuple[Key, ...] = (
         commented=True,
     ),
     Key(
+        "OPENAI_API_KEY",
+        "Another model",
+        "Only with brain.provider: openai_compatible: the key of that model's server (OpenAI, or any server speaking "
+        "its API). brain.openai_compatible.api_key_env can name another variable instead (GEMINI_API_KEY, ...).",
+        "creates an API key on that model's site (OpenAI: https://platform.openai.com/api-keys)",
+        placeholder="<key>",
+        noun="key",
+        restart=True,
+        section="Brain",
+        commented=True,
+    ),
+    Key(
         "TICKTICK_API_TOKEN",
         "TickTick",
         "TickTick (tasks, lists, habits): TickTick on the web, your avatar, Settings, Account & Security, API Token.",
@@ -229,7 +241,15 @@ KEYS: tuple[Key, ...] = (
 _BY_NAME = {key.name: key for key in KEYS}
 # Environment variables Octavia sets or reads for herself: never the user's, so never "unknown" in their .env.
 INTERNAL = frozenset(
-    {"OCTAVIA_HOME", "OCTAVIA_SUPERVISED", "OCTAVIA_SUPERVISOR_PID", "OCTAVIA_USAGE_DIR", "ANTHROPIC_AUTH_TOKEN", "OCTAVIA_USER_DIR"}
+    {
+        "OCTAVIA_HOME",
+        "OCTAVIA_SUPERVISED",
+        "OCTAVIA_SUPERVISOR_PID",
+        "OCTAVIA_USAGE_DIR",
+        "ANTHROPIC_AUTH_TOKEN",
+        "OCTAVIA_USER_DIR",
+    }
+    | {"OCTAVIA_EVAL_JUDGE"}  # the eval's judge pick (``evolve/evals.py`` --judge), set for its own runs
 )
 # Words too common in key names to say two keys are the same thing.
 _GENERIC = frozenset({"API", "KEY", "TOKEN", "URL", "URLS", "ID", "BASE", "APP", "PASSWORD", "ADDRESS"})
@@ -416,7 +436,7 @@ def check(cfg: AppConfig) -> list[Finding]:
         for name, times in seen.items():
             if times > 1:
                 out.append(Finding("problem", name, f"is in {file} {times} times; only the last one counts"))
-            if name not in _BY_NAME and name not in INTERNAL:
+            if name not in _BY_NAME and name not in INTERNAL and name != cfg.brain.openai_compatible.api_key_env:
                 meant = [n for n in _BY_NAME if name in similar_names(n, [name])]
                 detail = "isn't read by Octavia" + (f"; did you mean {' or '.join(meant)}?" if meant else "")
                 out.append(Finding("unknown", name, detail))

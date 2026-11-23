@@ -1,4 +1,4 @@
-# Shared eval cases: requests some install got wrong, scrubbed, proposed through the hivemind and accepted by the
+# Shared eval cases: requests some install got wrong, scrubbed, proposed through the ETHER and accepted by the
 # maintainer (`octavia hive accept`), run with the owner's cases on every build so every fix has to handle everyone's
 # failures. Same fields as eval_cases.yaml; ids start with "shared-". An install skips a shared case whose ``log`` is
 # one of its own cases (the same request, already run).

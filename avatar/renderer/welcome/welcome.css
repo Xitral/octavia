@@ -11,7 +11,11 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
-  font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; user-select: none; }
+  font: 14px/1.5 "Segoe UI", system-ui, sans-serif; user-select: none; }
+/* Headings, labels and buttons in Bahnschrift (Windows' own DIN face): the clean, slightly technical type of an old
+   console's system menu. */
+h1, h2, .kicker, .brand, button, summary, .field, .choice b, .toggle > span, .voice .who b, .hardware b, .waking {
+  font-family: Bahnschrift, "DIN Alternate", "Segoe UI", sans-serif; }
 .frame { height: 100%; display: flex; flex-direction: column;
   background: radial-gradient(1200px 700px at 30% 55%, #0d1d3a 0%, #070d1a 55%, #04060c 100%); }
 .titlebar { height: 34px; display: flex; align-items: center; padding-left: 16px; -webkit-app-region: drag; }
@@ -41,9 +45,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .step[hidden] { display: none; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .kicker { text-transform: uppercase; letter-spacing: 0.24em; font-size: 11px; color: var(--glow); margin: 0 0 6px; opacity: 0.8; }
-h1, h2 { font-weight: 300; margin: 0 0 16px; letter-spacing: 0.01em; }
-h1 { font-size: 34px; }
-h2 { font-size: 26px; }
+h1, h2 { font-weight: 400; margin: 0 0 16px; letter-spacing: 0.02em; font-stretch: semi-condensed; }
+h1 { font-size: 36px; }
+h2 { font-size: 27px; }
 p { margin: 0 0 12px; }
 .dim, small { color: var(--dim); }
 small { display: block; font-size: 12px; }
@@ -90,3 +94,33 @@ details .field { margin-top: 10px; }
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(127, 196, 255, 0.18); border-radius: 4px; }
 [hidden] { display: none !important; }
+
+/* Dropdowns: the select holds the value; this is what's shown. */
+select.native { display: none; }
+.dropdown { position: relative; margin-top: 4px; }
+.dropdown .pick { width: 100%; display: flex; align-items: center; justify-content: space-between; text-align: left;
+  padding: 8px 14px 8px 10px; background: rgba(8, 16, 32, 0.85); border-radius: 8px; color: var(--text);
+  font: inherit; font-size: 14px; letter-spacing: 0.01em; }
+.dropdown .pick span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dropdown .pick i { flex: none; width: 8px; height: 8px; margin: 0 4px 3px 14px; border-right: 1.5px solid var(--glow);
+  border-bottom: 1.5px solid var(--glow); transform: rotate(45deg); transition: transform 0.2s; }
+.dropdown.open .pick { border-color: var(--glow); box-shadow: 0 0 0 2px rgba(127, 196, 255, 0.15); }
+.dropdown.open .pick i { transform: rotate(-135deg); margin-bottom: -3px; }
+.dropdown .list { position: absolute; z-index: 10; left: 0; right: 0; top: calc(100% + 4px); max-height: 220px; overflow-y: auto;
+  margin: 0; padding: 4px; list-style: none; background: #0b1426; border: 1px solid rgba(127, 196, 255, 0.35);
+  border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55), 0 0 18px rgba(60, 130, 240, 0.18); }
+.dropdown .list li { padding: 7px 10px; border-radius: 6px; cursor: pointer; color: var(--text); }
+.dropdown .list li:hover { background: rgba(127, 196, 255, 0.12); }
+.dropdown .list li[aria-selected="true"] { color: var(--glow); }
+small.inline { display: inline; margin-left: 8px; }
+
+/* Waking up: OCTAVIA itself starting. */
+.waking { list-style: none; padding: 0; margin: 8px 0 18px; }
+.waking li { padding: 6px 0 6px 22px; position: relative; color: var(--dim); transition: color 0.4s; }
+.waking li::before { content: ""; position: absolute; left: 4px; top: 50%; width: 7px; height: 7px; margin-top: -4px;
+  border-radius: 50%; background: rgba(127, 196, 255, 0.18); transition: all 0.4s; }
+.waking li.now { color: var(--text); }
+.waking li.now::before { background: var(--glow); box-shadow: 0 0 10px var(--glow); animation: pulse 1.2s ease-in-out infinite; }
+.waking li.done { color: var(--dim); }
+.waking li.done::before { background: var(--glow); }
+@keyframes pulse { 50% { opacity: 0.35; } }

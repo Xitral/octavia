@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-PREVIEW_LINE = (
-    "[laughing]  Hey... [clear throat] I'm ready to help [soft] when you need me. [sighing] Just say the word!"
-)
+# The user's line without its cue tags: on these voices the laugh, throat-clear and sigh came out as odd noises
+# (2026-11-23), so the words carry it alone.
+PREVIEW_LINE = "Hey. I'm ready to help whenever you need me. Just say the word."
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 PREVIEW_MODEL = "s2.1-pro-free"
 

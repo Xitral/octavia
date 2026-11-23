@@ -336,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     if command == "release":
         return _cmd_release(args)
-    if command == "hive":
+    if command in ("ether", "hive"):
         from octavia.hive.cli import run as hive
 
         return hive(_load(args), args)

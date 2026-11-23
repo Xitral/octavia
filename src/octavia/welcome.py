@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import os
 import platform
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -119,7 +120,14 @@ def _pick(p: Prompter, question: str, options: list[str], default: int = 1) -> i
 def _list_devices() -> list[dict[str, Any]]:
     import sounddevice as sd
 
-    return [dict(d) for d in sd.query_devices()]
+    apis = [str(api.get("name", "")) for api in sd.query_hostapis()]
+    out = []
+    for d in sd.query_devices():
+        row = dict(d)
+        index = row.get("hostapi")
+        row["hostapi_name"] = apis[index] if isinstance(index, int) and 0 <= index < len(apis) else ""
+        out.append(row)
+    return out
 
 
 def _geocode(place: str) -> tuple[str, float, float] | None:
@@ -208,18 +216,71 @@ def step_brain(p: Prompter, s: Services, c: Choices) -> None:
             c.env["ANTHROPIC_API_KEY"] = key
         else:
             c.notes.append("Claude: add ANTHROPIC_API_KEY to .env before starting it.")
+    elif "openai_compatible" in others:
+        step_other_model(p, c)
     else:
         c.notes.append(f"Brain: set brain.provider to one of {', '.join(others)} in config/local.yaml.")
 
 
+# Servers that speak OpenAI's chat API: (shown as, base URL, the .env variable for its key or "" for none, a model
+# to suggest). The model names are only suggestions: whatever the server lists works.
+OTHER_MODELS = (
+    ("OpenAI", "https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-5.1"),
+    ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.5-pro"),
+    ("xAI Grok", "https://api.x.ai/v1", "XAI_API_KEY", "grok-4"),
+    ("Mistral", "https://api.mistral.ai/v1", "MISTRAL_API_KEY", "mistral-large-latest"),
+    ("DeepSeek", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", "deepseek-chat"),
+    ("Groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY", ""),
+    ("OpenRouter (many models, one key)", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", ""),
+    ("Ollama on this PC (no key)", "http://localhost:11434/v1", "", ""),
+    ("LM Studio on this PC (no key)", "http://localhost:1234/v1", "", ""),
+    ("Another server (its base URL)", "", "OPENAI_API_KEY", ""),
+)
+
+
+def step_other_model(p: Prompter, c: Choices) -> None:
+    """Its brain on another model, through any OpenAI-compatible API (``brain.openai_compatible``)."""
+    n = _pick(p, "Which one", [name for name, *_ in OTHER_MODELS])
+    name, url, key_env, model = OTHER_MODELS[n - 1]
+    if not url:
+        url = p.ask("Its base URL (ending in /v1 for most)", "http://localhost:8080/v1")
+    model = p.ask("The model's name there", model)
+    c.set("brain.provider", "openai_compatible")
+    c.set("brain.openai_compatible.base_url", url)
+    c.set("brain.openai_compatible.api_key_env", key_env)
+    if model:
+        c.set("brain.openai_compatible.model", model)
+    else:
+        c.notes.append("Brain: set brain.openai_compatible.model in config/local.yaml to the model's name.")
+    if key_env:
+        key = p.secret(f"Your {name} API key")
+        if key:
+            c.env[key_env] = key
+        else:
+            c.notes.append(f"Brain: add {key_env} to .env before starting it.")
+    c.notes.append(
+        "Brain: on a model other than Claude, its web search, self-improvement builds and objectives are off, "
+        "and how well it does depends on the model: `python -m octavia.evolve.evals run` measures it."
+    )
+
+
+# Windows lists every device once per audio system, MME's names cut at 31 characters, plus stand-ins for "whatever
+# the default is": only WASAPI's (the one she uses, full names) are shown, without the stand-ins.
+_NOT_DEVICES = re.compile(r"sound mapper|primary sound (capture )?driver", re.IGNORECASE)
+
+
 def _device_names(devices: list[dict[str, Any]], kind: str) -> list[str]:
     key = "max_input_channels" if kind == "input" else "max_output_channels"
+    usable = [d for d in devices if d.get(key, 0) > 0 and str(d.get("name", "")).strip()]
+    wasapi = [d for d in usable if "wasapi" in str(d.get("hostapi_name", "")).lower()]
     names: list[str] = []
-    for d in devices:
-        name = str(d.get("name", "")).strip()
-        if d.get(key, 0) > 0 and name and name not in names:
-            names.append(name)
-    return names
+    for d in wasapi or usable:
+        name = " ".join(str(d["name"]).split())
+        if _NOT_DEVICES.search(name) or name in names:
+            continue
+        names.append(name)
+    # What's left of a cut name next to its full one (no WASAPI list to choose from): the full one only.
+    return [n for n in names if not any(other != n and other.startswith(n) for other in names)]
 
 
 def step_audio(p: Prompter, s: Services, c: Choices) -> None:
@@ -339,12 +400,13 @@ def step_integrations(p: Prompter, c: Choices) -> None:
         if urls := p.ask("The addresses, separated by spaces", ""):
             c.env["CALENDAR_ICS_URLS"] = urls
     p.say(
-        "  The hivemind: fixes its self-improvement makes, short lessons and requests it got wrong can go to the\n"
+        "  The ETHER (Entangled Thought Harmonics and Emergent Resonance), where every OCTAVIA shares what it learns:\n"
+        "  fixes its self-improvement makes, short lessons and requests it got wrong can go to the\n"
         "  maintainer, so every OCTAVIA gets better from each other's. Each is checked for anything personal first\n"
         "  (kept back if it holds any), and a person reviews it before anyone gets it. Updates come signed either way.\n"
         "  Sharing means the maintainer may use, change, include and relicense what you send in OCTAVIA (README, License)."
     )
-    if _yes(p.ask("Share what it learns with the hivemind? y/n", "n")):
+    if _yes(p.ask("Share what it learns with the ETHER? y/n", "n")):
         c.set("hive.share", "on")
 
 

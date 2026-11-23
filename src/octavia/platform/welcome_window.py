@@ -24,6 +24,25 @@ from octavia.tts import presets
 
 APP = "avatar/welcome"
 READY_TIMEOUT_S = 30.0
+WAKE_TIMEOUT_S = 300.0
+LAUNCHED = 0  # exit codes of the window: it saved and started OCTAVIA...
+SAVED = 3  # ...it saved, OCTAVIA wasn't started from it...
+NOTHING = 1  # ...nothing was saved
+
+
+def launch(root: Path) -> str | None:
+    """Starts OCTAVIA on its own (windowless, as the Start menu does); an error message, or None."""
+    scripts = root / ".venv" / "Scripts"
+    launcher = scripts / "octaviaw.exe"
+    command = [str(launcher)] if launcher.exists() else [str(scripts / "pythonw.exe"), "-m", "octavia", "run"]
+    if not Path(command[0]).exists():
+        return "its program wasn't found. Start it from the Start menu: OCTAVIA."
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    try:
+        subprocess.Popen(command, cwd=root, creationflags=flags, close_fds=True)  # noqa: S603
+    except OSError as exc:
+        return f"it couldn't be started ({exc})."
+    return None
 
 
 def app_command(root: Path, electron: str, app_config: Path) -> list[str] | None:
@@ -44,6 +63,7 @@ class Session:
         self.services = services or welcome.default_services()
         self.choices: welcome.Choices | None = None
         self.done = False
+        self.launched = False  # "Start OCTAVIA" started it (the installer then doesn't)
 
     def model(self) -> dict[str, Any]:
         try:
@@ -63,6 +83,12 @@ class Session:
                 "outputs": welcome._device_names(devices, "output")[:30],
             },
             "presets": [{"name": p.name, "voice_id": p.voice_id, "about": p.about} for p in presets.PRESETS],
+            # Another model than Claude (welcome.OTHER_MODELS): name, base URL ("" = the user gives it), key variable,
+            # a default model name.
+            "models": [
+                {"name": name, "base_url": url, "key_env": key_env, "model": model}
+                for name, url, key_env, model in welcome.OTHER_MODELS
+            ],
             "hardware": hw,
         }
 
@@ -80,9 +106,33 @@ class Session:
         elif kind == "sign-in":
             threading.Thread(target=self._sign_in, daemon=True).start()
         elif kind == "done":
-            self.done = True
+            threading.Thread(target=self._wake, daemon=True).start()
 
     # ---- answers
+    def _wake(self) -> None:
+        """Starts OCTAVIA and waits until it says it's up (``data/ready.json``), then the window closes."""
+        started = time.time()
+        error = launch(self.root)
+        if error is None:
+            ready = self.root / "data" / "ready.json"
+            while time.time() - started < WAKE_TIMEOUT_S:
+                try:
+                    if ready.stat().st_mtime >= started - 1:
+                        self.launched = True
+                        self.send({"type": "awake", "ok": True})
+                        time.sleep(3.0)  # long enough to read it
+                        break
+                except OSError:
+                    pass
+                time.sleep(0.5)
+            else:
+                error = "it's taking unusually long. It may still finish: look for its orb, or start it from the Start menu."
+        if error is not None:
+            self.send({"type": "awake", "ok": False, "message": error})
+            time.sleep(6.0)
+        self.done = True
+        self.send({"type": "quit"})
+
     def _check_key(self, key: str) -> None:
         try:
             audio = presets.preview(key, presets.DEFAULT.voice_id)
@@ -131,7 +181,8 @@ class Session:
         if config.get("brain", {}).get("claude", {}).get("auth") == "api_key" and "ANTHROPIC_API_KEY" not in env:
             notes.append("Add your Anthropic API key in Settings before you talk to it.")
         notes.append("Everything here can be changed later: right-click its tray icon, Settings.")
-        sign_in = config.get("brain", {}).get("claude", {}).get("auth") == "subscription"
+        brain = config.get("brain", {})
+        sign_in = brain.get("provider", "claude") == "claude" and brain.get("claude", {}).get("auth") == "subscription"
         self.send({"type": "saved", "ok": True, "notes": notes, "sign_in": sign_in})
 
     def _sign_in(self) -> None:
@@ -147,7 +198,7 @@ class Session:
 
 # What the page may set: these sections' keys only, and these .env names.
 ALLOWED_CONFIG = {
-    "brain": {"claude": {"auth"}},
+    "brain": {"claude": {"auth"}, "openai_compatible": {"base_url", "model", "api_key_env"}},
     "audio": {"input_device", "output_device", "headphones"},
     "tts": {"provider", "fallback", "voice_effect", "fish_audio"},
     "assistant": {"name", "wake_phrase", "user_name", "home", "home_latitude", "home_longitude"},
@@ -157,7 +208,7 @@ ALLOWED_CONFIG = {
 ALLOWED_ENV = {
     "ANTHROPIC_API_KEY", "FISH_AUDIO_API_KEY", "DISCORD_BOT_TOKEN", "DISCORD_OWNER_ID", "TICKTICK_API_TOKEN",
     "CANVAS_BASE_URL", "CANVAS_API_TOKEN", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD",
-}  # fmt: skip
+} | {key_env for _, _, key_env, _ in welcome.OTHER_MODELS if key_env}  # fmt: skip
 
 
 def _allowed(config: dict[str, Any]) -> dict[str, Any]:
@@ -169,6 +220,8 @@ def _allowed(config: dict[str, Any]) -> dict[str, Any]:
         if isinstance(keys, dict):
             inner = {k: {kk: vv for kk, vv in (given.get(k) or {}).items() if kk in v} for k, v in keys.items()}
             inner = {k: v for k, v in inner.items() if v}
+            if section == "brain" and given.get("provider") in ("claude", "openai_compatible"):
+                inner["provider"] = given["provider"]
             if inner:
                 out[section] = inner
             continue
@@ -238,7 +291,7 @@ def run(root: Path, electron: str = "", hidden: bool = False) -> int | None:
         if msg is None or msg.get("type") == "closed":
             break
         session.handle(msg)
-        if session.done:
-            send({"type": "quit"})
     proc.wait(timeout=10)
-    return 0 if session.choices is not None else 1
+    if session.launched:
+        return LAUNCHED
+    return SAVED if session.choices is not None else NOTHING

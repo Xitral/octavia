@@ -92,7 +92,7 @@ barge_in:
   aec_warmup_s: 3.0
 
 brain:
-  provider: claude
+  provider: claude           # claude (Claude Code, your subscription) | openai_compatible (any OpenAI-style API, below)
   answers: auto                # auto (routed as local_brain.mode says) | claude (only Claude) | local (only the local brain)
   claude:
     model: "opus"              # opus | sonnet | haiku, or a full model id
@@ -122,6 +122,31 @@ brain:
     config_dir: "data/claude-home"   # the assistant's own Claude login; `octavia login` signs it in
     resume_last_session: false
     work_dir: "data/brain"
+  # Her brain on any OpenAI-compatible chat API, when provider is openai_compatible (OpenAI, Gemini, Grok, Mistral,
+  # DeepSeek, Groq, OpenRouter, Ollama, LM Studio, llama.cpp). Claude-only extras (web tools, cache warm-up, her quick
+  # voice and opening words) are off there. Base URLs: https://api.openai.com/v1,
+  # https://generativelanguage.googleapis.com/v1beta/openai, https://api.x.ai/v1, https://api.mistral.ai/v1,
+  # https://api.deepseek.com/v1, https://api.groq.com/openai/v1, https://openrouter.ai/api/v1,
+  # http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio).
+  openai_compatible:
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"   # the .env variable holding the key; "" for a local server with none
+    model: ""                  # the model's name there, e.g. gpt-5.1, gemini-3-pro, grok-4, qwen3:14b
+    max_turns: 80
+    vision: true               # send pictures; false for a model that can't see
+    temperature: null          # null = the server's default
+    max_tokens: null
+    reasoning_effort: null     # minimal | low | medium | high, for reasoning models that take it
+    max_tools: 128             # most of these APIs take at most 128 tools per request
+    tools_on_demand: true      # past max_tools: always_loaded_tools in full, the rest loaded by her load_tools tool
+    always_loaded_tools: null  # null = brain.claude.always_loaded_tools
+    context_limit_tokens: 90000   # past this the oldest exchanges are dropped, whole
+    stream_usage: true         # ask for token counts with the stream; false for a server that refuses it
+    connect_timeout_s: 30
+    request_timeout_s: 300
+    stall_timeout_s: 120
+    extra_headers: {}          # e.g. OpenRouter's HTTP-Referer
+    judge_model: ""            # the eval's judge here when there's no Claude; "" = model
 
 tts:
   provider: fish_audio         # fish_audio | local (her cloned voice on this PC, Fish as its backup) | local_only
@@ -615,7 +640,7 @@ discord_bridge:
   mute_pc_on_call: true        # on a call her voice goes to the call only, not out of this PC's speaker too
   call_wake_word: false        # on a call everything you say is for her; true = say her name first, as at the PC
 
-# The hivemind (src/octavia/hive/, docs/hive.md): signed updates from the maintainer, and what this install learns
+# The ETHER (src/octavia/hive/, docs/ether.md): signed updates from the maintainer, and what this install learns
 # (fixes, lessons, failed cases) proposed back, scrubbed of anything personal, only when share is on.
 hive:
   feed: ""                     # an https address or folder with channel.json + channel.json.sig ("" = no updates)

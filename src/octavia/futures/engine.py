@@ -227,7 +227,7 @@ class FuturesService:
             context=lambda ts: time_context(ts, local_time=local_time),
             categories=dict(categories or {}),
             keep_request_words=settings.keep_request_words,
-            model=config.brain.claude.model if config.brain.provider == "claude" else config.brain.provider,
+            model=config.brain.claude.model if config.brain.provider == "claude" else config.brain.openai_compatible.model,
             boot=self.boot,
         )
         self.hooks = Hooks()

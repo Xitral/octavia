@@ -1,4 +1,4 @@
-"""``octavia hive ...``: the hivemind from the command line (see ``octavia/hive/__init__.py``)."""
+"""``octavia hive ...``: the ETHER from the command line (see ``octavia/hive/__init__.py``)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from octavia.config import AppConfig
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
-    hive = sub.add_parser("hive", help="The hivemind: signed updates, and what she learned proposed upstream")
+    hive = sub.add_parser(
+        "ether", aliases=["hive"], help="The ETHER: signed updates, and what it learned proposed upstream"
+    )
     hv = hive.add_subparsers(dest="hive_command", required=True)
     hv.add_parser("status", help="The feed's releases, their shared-eval pass rates, and this install's")
     up = hv.add_parser("update", help="Apply the newest signed release (public installs)")

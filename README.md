@@ -58,7 +58,8 @@ its orb wakes as you go:
 4. **Who it is:** its name, the word that wakes it, what it calls you.
 5. **Home:** your town, for the weather, directions and maps.
 6. **Its reach:** Discord (text and call it from your phone through your own bot), TickTick, Canvas, Gmail, and
-   whether to share what it learns with the hivemind.
+   whether to share what it learns with the ETHER (**E**ntangled **T**hought **H**armonics and **E**mergent
+   **R**esonance: the space where every OCTAVIA shares what it learns, nothing personal ever included).
 7. **This PC:** what it can run.
 
 Run the setup again any time with `uv run octavia welcome --window` from its folder.
@@ -91,5 +92,5 @@ answers only your account: DMs from anyone else are ignored, and on a voice call
 [PolyForm Noncommercial 1.0.0](LICENSE.md): free to use, change and share for any noncommercial purpose. Selling
 OCTAVIA, or building a paid product or service on it, needs the maintainer's permission.
 
-Proposals sent through the hivemind (fixes, lessons, test cases) are contributions: by turning sharing on you agree
+Proposals sent through the ETHER (fixes, lessons, test cases) are contributions: by turning sharing on you agree
 the maintainer may use, change, include and relicense them in OCTAVIA, under this license or any later one.

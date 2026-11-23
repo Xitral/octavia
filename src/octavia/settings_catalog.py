@@ -703,7 +703,10 @@ SECTIONS: tuple[Section, ...] = (
         "API keys and accounts, kept in .env on this PC.",
         "Connections",
         (
-            _g("Claude and her voice", *_keys("ANTHROPIC_API_KEY", "FISH_AUDIO_API_KEY", "FISH_AUDIO_VOICE_ID")),
+            _g(
+                "Her brain and her voice",
+                *_keys("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "FISH_AUDIO_API_KEY", "FISH_AUDIO_VOICE_ID"),
+            ),
             _g("School and tasks", *_keys("CANVAS_API_TOKEN", "CANVAS_BASE_URL", "TICKTICK_API_TOKEN")),
             _g("Mail and calendar", *_keys("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "CALENDAR_ICS_URLS")),
             _g("Music", *_keys("SPOTIFY_CLIENT_ID", "AUDD_API_TOKEN")),
@@ -718,12 +721,15 @@ SECTIONS: tuple[Section, ...] = (
 # at build time (tools, plugins, props), log paths, and the switches that would loosen her safety rules (tool
 # permissions, unrestricted built-in tools). ``test_every_config_setting_is_shown_or_left_out_on_purpose`` makes a
 # new setting land in a section or here.
+# hive: the trust path, set by the build and `octavia welcome`. brain.openai_compatible: another model's server, key
+# and name, set with brain.provider (not shown either) in config/local.yaml or by the setup wizard's brain step.
 NOT_SHOWN_PREFIXES = (
     "avatar.props.",
     "tools.",
     "permissions.",
     "hive.",
-)  # hive: the trust path, set by the build and `octavia welcome`
+    "brain.openai_compatible.",
+)
 NOT_SHOWN = frozenset(
     {
         # files and folders
@@ -2079,6 +2085,7 @@ _ENV_LABELS = {
     "FISH_AUDIO_API_KEY": "Fish Audio API key",
     "FISH_AUDIO_VOICE_ID": "Fish Audio voice ID",
     "ANTHROPIC_API_KEY": "Anthropic API key",
+    "OPENAI_API_KEY": "Another model's API key",
     "TICKTICK_API_TOKEN": "TickTick token",
     "CANVAS_API_TOKEN": "Canvas token",
     "CANVAS_BASE_URL": "Canvas address",

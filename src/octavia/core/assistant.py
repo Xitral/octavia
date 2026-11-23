@@ -745,6 +745,27 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
         self._aside("assistant", choice[0])
         return True
 
+    def _say_starting(self, call: ToolUseStarted) -> bool:
+        """Say what she's doing ("Putting it on a panel.") when she starts writing out a call that takes her long to
+        write (``acknowledge.SLOW_TO_WRITE``) before any word of her answer: a new panel is some ten seconds of
+        writing the user would sit through in silence. The call has only begun (the brain says so as its first
+        characters come), so the line plays while she writes it. A cached phrase beside the reply, as the web
+        search's: it says what she's about to do, never that it's done. Returns whether it was said."""
+        if (
+            call.builtin
+            or self.config.conversation.acknowledge != "speech"
+            or self.acknowledger is None
+            or self.speech is None
+        ):
+            return False
+        choice = self.acknowledger.starting(call.name)
+        if choice is None:
+            return False
+        log.info("Said %r as she began writing %s", choice[0], call.name)
+        self.speech.play_phrase(*choice)
+        self._aside("assistant", choice[0])
+        return True
+
     def _acknowledge_early(self, text: str, pause_ms: float) -> None:
         """Say "On it!" in the user's pause, once what they've said sounds finished and is for the brain, rather than
         after the rest of the end-of-speech silence, and start the brain on it then too (``_start_early``). With
@@ -1263,7 +1284,7 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
         done_event: ResponseDone | None = None
         worked = False  # she took a step (a tool call) in this turn
         after_step = False  # no text yet since her last step
-        searched = False  # she said she's searching the web
+        searched = False  # she said she's searching the web, or what she's starting on (once a turn)
 
         watchdog = self._watchdog()
         still = asyncio.create_task(self._still_working()) if stream is not None and not quiet else None
@@ -1321,7 +1342,8 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
                             claim.text(ev.text)
                     elif isinstance(ev, ToolUseStarted):
                         if first_token is None and not quiet and stream is not None and not searched:
-                            searched = self._say_searching(ev)
+                            # Not a word yet and a wait ahead (a web search, a long call to write): one line says so.
+                            searched = self._say_searching(ev) or self._say_starting(ev)
                         worked = after_step = True
                         called.append(ev.name)
                         if steps[-1]:

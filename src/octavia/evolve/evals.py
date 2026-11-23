@@ -64,7 +64,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 CASES_FILE = Path(__file__).with_name("eval_cases.yaml")
-# Cases from every install's failures, accepted by the maintainer through the hivemind (src/octavia/hive/): run with the
+# Cases from every install's failures, accepted by the maintainer through the ETHER (src/octavia/hive/): run with the
 # owner's own, so a fix has to work for everyone. Their ids start with SHARED_PREFIX.
 SHARED_CASES_FILE = Path(__file__).with_name("shared_cases.yaml")
 SHARED_PREFIX = "shared-"
@@ -167,6 +167,17 @@ _INFRA = re.compile(
     r"|the judge couldn't answer",
     re.I,
 )
+# Which brain a run asks, over her config (``--provider`` and the rest set them; the ``ab`` runs inherit them).
+BRAIN_ENV = {
+    "provider": "OCTAVIA_EVAL_PROVIDER",
+    "model": "OCTAVIA_EVAL_MODEL",
+    "base_url": "OCTAVIA_EVAL_BASE_URL",
+    "api_key_env": "OCTAVIA_EVAL_API_KEY_ENV",
+}
+JUDGE_ENV = "OCTAVIA_EVAL_JUDGE"
+# What a run may be billed to (``info()["auth"]``): her Claude subscription, or another brain her config names (its
+# own key, asked for by its user); never Claude on API credits (``brain.claude.auth: api_key``).
+RUNS_ON = frozenset({"subscription", "openai_compatible"})
 _KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")  # would bill the API instead of her subscription
 # What a reply that is read aloud must not have (personality/system.md): markdown, a list, a link.
 _WRITTEN = re.compile(r"\*\*|^\s*(?:[-*•]|#{1,6}|\d+\.)\s|https?://|```", re.M)
@@ -243,7 +254,7 @@ def shared_mocks(path: Path) -> dict[str, str | tuple[str, ...]]:
 
 
 def load_shared(path: Path) -> list[Case]:
-    """The hivemind's shared cases (``SHARED_CASES_FILE``); one that doesn't read is left out, never the build's
+    """The ETHER's shared cases (``SHARED_CASES_FILE``); one that doesn't read is left out, never the build's
     fault."""
     import yaml
 
@@ -490,7 +501,7 @@ class _FakeExecutor:
         self.calls.clear()
         self._made.clear()
 
-    async def execute(self, name: str, args: dict[str, Any] | None) -> Any:
+    async def execute(self, name: str, args: dict[str, Any] | None, call_id: str | None = None) -> Any:
         from octavia.tools.base import ToolResult
 
         call = Call(name, dict(args or {}))
@@ -514,14 +525,17 @@ class _Setup:
 
     def info(self, cases: list[Case]) -> dict[str, Any]:
         names = {s.name for s in self.specs}
-        claude = self.config.brain.claude
+        brain = self.config.brain
+        claude = brain.claude
         named = set().union(*(c.tools() for c in cases)) if cases else set()
+        other = {} if brain.is_claude else {"provider": brain.provider, "base_url": brain.openai_compatible.base_url}
         return {
             "fingerprint": self.fingerprint(cases),
             "code": str(self.code_root),
-            "model": claude.model,
-            "effort": claude.effort,
-            "auth": claude.auth,
+            "model": brain.model,
+            "effort": claude.effort if brain.is_claude else brain.openai_compatible.reasoning_effort,
+            "auth": claude.auth if brain.is_claude else brain.provider,
+            **other,
             "tools": len(self.specs),
             "prompt_chars": len(self.prompt),
             "spec_chars": len(_specs_json(self.specs)),
@@ -530,20 +544,24 @@ class _Setup:
         }
 
     def _web_tools(self) -> list[str]:
+        if not self.config.brain.is_claude:
+            return []  # Claude Code's own: no other brain has them
         return [t for t in self.config.brain.claude.builtin_tools if t]
 
     def fingerprint(self, cases: Iterable[Case] = ()) -> str:
         """Everything the model sees or that times its turn: change any of it and earlier runs say nothing. With the
         caught cases among ``cases``, which aren't in the files hashed here."""
-        claude = self.config.brain.claude
+        brain = self.config.brain
+        # The Claude brain's settings as before (so a Claude run's fingerprint is unchanged); another brain's too.
+        settings = brain.claude if brain.is_claude else brain.openai_compatible
         caught = [asdict(c) for c in cases if c.id.startswith(CAUGHT_PREFIX)]
         h = hashlib.sha256()
         for part in (
             json.dumps(caught, sort_keys=True, default=sorted) if caught else "",
             self.prompt,
             _specs_json(self.specs),
-            json.dumps(claude.model_dump(mode="json"), sort_keys=True, default=str),
-            _sdk_version(),
+            json.dumps(settings.model_dump(mode="json"), sort_keys=True, default=str),
+            _sdk_version() if brain.is_claude else f"{brain.provider} {brain.openai_compatible.base_url}",
             *(_read_bytes(p) for p in _timed_sources(self.code_root)),
         ):
             h.update(part.encode("utf-8", "replace") if isinstance(part, str) else part)
@@ -605,7 +623,7 @@ async def _setup(root: Path | None) -> _Setup:
         os.environ.pop(key, None)
     local = Path(os.environ.get("OCTAVIA_CONFIG") or main_root / "config" / "local.yaml")
     config = load_config(path=local if local.is_absolute() else main_root / local, root=code_root)
-    config = config.model_copy(update={"root": main_root})
+    config = _brain_override(config.model_copy(update={"root": main_root}))
     core: list[Any] = []
     if config.self_improvement.enabled:
         from octavia.evolve import tools as evolve_tools
@@ -624,6 +642,30 @@ async def _setup(root: Path | None) -> _Setup:
         for tool in [t for t in registry.all() if t.category == "deep_think"]:
             registry.unregister(tool.name)
     return _Setup(config, registry.specs(), await _system_prompt(config, code_root), code_root)
+
+
+def _brain_override(config: Any) -> Any:
+    """``config`` with the brain the ``OCTAVIA_EVAL_*`` variables name (``BRAIN_ENV``) instead of its own."""
+    given = {key: os.environ[env] for key, env in BRAIN_ENV.items() if env in os.environ}
+    if not given:
+        return config
+    brain = config.brain
+    provider = given.pop("provider", brain.provider)
+    other = brain.openai_compatible.model_copy(update=given) if provider != "claude" else brain.openai_compatible
+    claude = (
+        brain.claude.model_copy(update={"model": given["model"]})
+        if provider == "claude" and "model" in given
+        else brain.claude
+    )
+    brain = type(brain).model_validate(
+        {
+            **brain.model_dump(),
+            "provider": provider,
+            "claude": claude.model_dump(),
+            "openai_compatible": other.model_dump(),
+        }
+    )
+    return config.model_copy(update={"brain": brain})
 
 
 async def _system_prompt(config: Any, code_root: Path) -> str:
@@ -678,16 +720,21 @@ async def _run_case(case: Case, mocks: dict[str, str], setup: _Setup) -> CaseRes
 
     # A CLI still closing holds its folder on Windows: a leftover folder mustn't lose the run.
     with tempfile.TemporaryDirectory(prefix="octavia-eval-", ignore_cleanup_errors=True) as work:
-        brain = ClaudeBrain(
-            claude,
-            setup.specs,
-            executor,  # type: ignore[arg-type]
-            prompt,
-            work_dir=Path(work),
-            events=EventBus(),
-            config_dir=config.resolve_path(claude.config_dir) if claude.config_dir else None,
-            cli_path=config.claude_cli_path(),
-        )
+        if config.brain.is_claude:
+            brain = ClaudeBrain(
+                claude,
+                setup.specs,
+                executor,  # type: ignore[arg-type]
+                prompt,
+                work_dir=Path(work),
+                events=EventBus(),
+                config_dir=config.resolve_path(claude.config_dir) if claude.config_dir else None,
+                cli_path=config.claude_cli_path(),
+            )
+        else:  # any other brain her config names (``brain.openai_compatible``), on the same cases and fakes
+            from octavia.brain import openai_compat
+
+            brain = openai_compat.create(config, setup.specs, executor, prompt)  # type: ignore[arg-type]
         try:
             await brain.start()
             async with asyncio.timeout(CASE_TIMEOUT_S):
@@ -804,7 +851,15 @@ async def _ask_judge(prompt: str, setup: _Setup) -> str:
 
 async def ask_small(prompt: str, config: Any, system: str, model: str = JUDGE_MODEL) -> str:
     """One reply of ``model`` (no tools, nothing else in its context) on her Claude login: for the judge and the
-    drafts of what a good reply does (``evolve/rubrics.py``), and the replay's stronger judge (``evolve/replay.py``)."""
+    drafts of what a good reply does (``evolve/rubrics.py``), and the replay's stronger judge (``evolve/replay.py``).
+    With another brain the judge stays Claude's while her Claude login works (so grades compare across models);
+    without one, that brain's own server answers (``judge_model`` there, else its model). ``OCTAVIA_EVAL_JUDGE``
+    ("claude" or "brain") picks."""
+    if not judge_on_claude(config):
+        from octavia.brain import openai_compat
+
+        other = config.brain.openai_compatible
+        return await openai_compat.ask(other, prompt, system, model=other.judge_model or other.model)
     from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
 
     from octavia.brain.claude import cli_environment, prepare_process_environment
@@ -832,6 +887,28 @@ async def ask_small(prompt: str, config: Any, system: str, model: str = JUDGE_MO
                 if isinstance(message, AssistantMessage):
                     parts.extend(block.text for block in message.content if isinstance(block, TextBlock))
         return "".join(parts)
+
+
+_LOGINS: dict[str, bool] = {}
+
+
+def judge_on_claude(config: Any) -> bool:
+    """Whether the judge (``ask_small``) runs on Claude: always with the Claude brain; with another, while her
+    Claude login works (checked once a run), unless ``OCTAVIA_EVAL_JUDGE`` says."""
+    if config.brain.is_claude:
+        return True
+    wanted = os.environ.get(JUDGE_ENV, "").strip().lower()
+    if wanted in ("claude", "brain"):
+        return wanted == "claude"
+    key = str(config.root)
+    if key not in _LOGINS:
+        try:
+            from octavia.brain.claude_auth import auth_status
+
+            _LOGINS[key] = bool((auth_status(config) or {}).get("loggedIn"))
+        except Exception:
+            _LOGINS[key] = False
+    return _LOGINS[key]
 
 
 def _turn(case: Case, said: str, setup: _Setup) -> Any:
@@ -1095,11 +1172,14 @@ class CaseRecord:
     recent: dict[str, list[bool]] = field(default_factory=dict)
 
     @classmethod
-    def load(cls, store: Path, fingerprint: str) -> CaseRecord:
+    def load(cls, store: Path, fingerprint: str, model: str | None = None) -> CaseRecord:
+        """``model``: only that model's baseline tries say how flaky a case is (a row naming none is from before rows
+        named theirs: her own model then)."""
         record = cls(fingerprint)
         for row in _case_rows(store):
             same = row.get("fp") == fingerprint
-            if same or row.get("role") == "baseline":
+            other = model is not None and row.get("model") not in (None, model)
+            if same or (row.get("role") == "baseline" and not other):
                 record._add(str(row.get("id")), bool(row.get("ok")), same)
         return record
 
@@ -1278,8 +1358,11 @@ async def evaluate(settings: EvalSettings, candidate_src: Path, label: str = "bu
         base_info = await base_task
     except _Failed as exc:  # the code compared with is broken (an edit in progress?): not the build's fault
         return _flag(f"the current code didn't load ({exc})")
-    if cand_info.get("auth", "subscription") != "subscription":
+    if cand_info.get("auth", "subscription") not in RUNS_ON:
         return _flag("it only runs on the Claude subscription (brain.claude.auth)")
+    if (cand_info.get("model"), cand_info.get("provider")) != (base_info.get("model"), base_info.get("provider")):
+        # Code from before the eval took --provider/--model ignores them: the two would ask different models.
+        return _flag(f"the two runs ask different models ({base_info.get('model')} vs {cand_info.get('model')})")
     gone = sorted(set(cand_info["missing_tools"]) - set(base_info["missing_tools"]))
     if gone:
         return fail(
@@ -1345,7 +1428,7 @@ async def evaluate(settings: EvalSettings, candidate_src: Path, label: str = "bu
     result = compare(baseline, candidate)
     # A model answers differently now and then, so the first tries only say which cases to look at: each one the
     # build failed is settled on its own, against the current code's record of it (whichever the first tries said).
-    record = CaseRecord.load(store, base_info["fingerprint"])
+    record = CaseRecord.load(store, base_info["fingerprint"], base_info.get("model"))
     settled = await _settle(settings, store, record, candidate, (candidate_src, baseline_src), label, left)
     _apply(result, settled)
     flags = [f"couldn't tell whether the build fails {', '.join(settled.unsure)} for good"] if settled.unsure else []
@@ -1412,7 +1495,7 @@ async def measure(settings: EvalSettings, label: str = "nightly") -> dict[str, A
     store = Path(settings.repo) / EVAL_DIR
     src = Path(settings.baseline_src or Path(settings.repo) / "src")
     info = await _info(settings, src)
-    if info.get("auth", "subscription") != "subscription":
+    if info.get("auth", "subscription") not in RUNS_ON:
         return None
     run = _kept(store, info["fingerprint"], float("inf"), settings.workers)
     fresh = run is None
@@ -1601,6 +1684,7 @@ def _rows_of(run: dict[str, Any], role: str, only: Iterable[str] | None = None) 
     """A run's tries as lines of the record. A try Claude couldn't be reached for says nothing, so it's left out."""
     wanted = None if only is None else set(only)
     fingerprint = (run.get("info") or {}).get("fingerprint")
+    model = (run.get("info") or {}).get("model")
     at = run.get("started")
     rows = []
     for row in run.get("cases") or []:
@@ -1610,6 +1694,8 @@ def _rows_of(run: dict[str, Any], role: str, only: Iterable[str] | None = None) 
             if attempt.get("infra"):
                 continue
             line = {"at": at, "fp": fingerprint, "role": role, "id": row.get("id"), "ok": bool(attempt.get("passed"))}
+            if model:
+                line["model"] = model
             if not attempt.get("passed"):
                 line["why"] = "; ".join(attempt.get("failures") or [])[:160]
             rows.append(line)
@@ -1773,7 +1859,7 @@ def _parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="replay the cases with the code on PYTHONPATH")
     run.add_argument("--cases", help="comma-separated case ids (default: all)")
     run.add_argument(
-        "--shared", action="store_true", help="only the hivemind's shared cases, all of them (a release's measure)"
+        "--shared", action="store_true", help="only the ETHER's shared cases, all of them (a release's measure)"
     )
     run.add_argument("--workers", type=int, default=WORKERS)
     run.add_argument("--label", default="manual")
@@ -1790,6 +1876,18 @@ def _parser() -> argparse.ArgumentParser:
     ab.add_argument("--force", action="store_true", help="run even when nothing the model sees changed")
     flakes = sub.add_parser("flakes", help="how reliably each case passes lately, and the eval's timing against live")
     flakes.add_argument("--last", type=int, default=PRIOR_TRIES, help="tries of each case to look at")
+    for p in (run, info, ab):
+        p.add_argument(
+            "--provider", choices=["claude", "openai_compatible"], help="the brain to ask (default: her config's)"
+        )
+        p.add_argument("--model", help="its model (default: her config's)")
+        p.add_argument("--base-url", help="openai_compatible: the server's base URL, e.g. https://api.openai.com/v1")
+        p.add_argument(
+            "--api-key-env", help="openai_compatible: the environment variable holding its key ('' for none)"
+        )
+        p.add_argument(
+            "--judge", choices=["claude", "brain"], help="who grades judged cases (default: Claude while logged in)"
+        )
     for p in (run, info, ab, flakes):
         p.add_argument("--root", help="the main checkout (her config and Claude login); default: found as usual")
         p.add_argument("--out", help="write the result here as JSON")
@@ -1798,6 +1896,11 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    for key, env in BRAIN_ENV.items():  # in the environment, so the ``ab`` runs ask the same brain
+        if getattr(args, key, None) is not None:
+            os.environ[env] = getattr(args, key)
+    if getattr(args, "judge", None):
+        os.environ[JUDGE_ENV] = args.judge
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     command = {"run": _cmd_run, "info": _cmd_info, "ab": _cmd_ab, "flakes": _cmd_flakes}[args.command]
     return asyncio.run(command(args))

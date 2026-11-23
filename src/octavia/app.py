@@ -167,7 +167,26 @@ def create_brain(
             config_dir=config.resolve_path(cfg.config_dir) if cfg.config_dir else None,
             cli_path=config.claude_cli_path(),
         )
+    if name == "openai_compatible":
+        from octavia.brain import openai_compat
+
+        return openai_compat.create(config, specs, executor, prompt.build)
     raise StartupError(f"Unknown brain provider {name!r}")
+
+
+# What runs on Claude Code itself, not on a brain: her self-improvement builds (code written by Claude Code) and
+# objectives (their code sessions). On another brain they're off, said once in the log, instead of failing later.
+CLAUDE_CODE_ONLY = ("self_improvement", "objectives")
+
+
+def _claude_code_only_off(config: AppConfig) -> None:
+    if config.brain.is_claude:
+        return
+    off = [name for name in CLAUDE_CODE_ONLY if getattr(config, name).enabled]
+    for name in off:
+        getattr(config, name).enabled = False
+    if off:
+        log.info("Off on brain.provider %s (they run on Claude Code): %s", config.brain.provider, ", ".join(off))
 
 
 _KEEP = object()  # create_task_brain's effort: the conversation's own
@@ -226,6 +245,15 @@ def create_task_brain(
             events=events,
             config_dir=config.resolve_path(cfg.config_dir) if cfg.config_dir else None,
             cli_path=config.claude_cli_path(),
+        )
+    if name == "openai_compatible":
+        # One model there: ``model`` and ``effort`` name Claude's (a deep think's opus at a higher effort), so the
+        # task runs on her configured model. It has no built-in web tools either way.
+        from octavia.brain import openai_compat
+        from octavia.tools.extensions._background_tasks import MAX_TURNS
+
+        return openai_compat.create(
+            config, executor.registry.specs(), executor, system_prompt, max_turns=max_turns or MAX_TURNS
         )
     raise StartupError(f"Unknown brain provider {name!r}")
 
@@ -392,6 +420,7 @@ class App:
             memory, conv_store, state = SqliteLongTermMemory(db), SqliteConversationStore(db), SqliteToolStateStore(db)
             await self._settle_notes(memory)
 
+        _claude_code_only_off(cfg)
         # Self-improvement (off unless enabled): its tools are registered first so no other
         # module can take their names.
         core_tools: list[Any] = []
@@ -546,7 +575,8 @@ class App:
         await self._start_inner_life(registry, context, memory, conv_store)
         await self._start_routines(registry, context)
         self._start_study(registry, context)
-        resume_id = await self._last_brain_session(db) if cfg.brain.claude.resume_last_session else None
+        resume = cfg.brain.is_claude and cfg.brain.claude.resume_last_session  # a session to resume is Claude Code's
+        resume_id = await self._last_brain_session(db) if resume else None
         if restart_marker is not None and restart_marker.brain_session_id:
             resume_id = restart_marker.brain_session_id  # restarted for an update: same conversation
         brain = create_brain(cfg, executor, prompt, self.events, resume_session_id=resume_id)
@@ -663,7 +693,7 @@ class App:
             routing_log = RoutingLog(
                 self.events,
                 cfg.resolve_path(cfg.routing.log_file),
-                cfg.brain.claude.model,
+                cfg.brain.model,
                 end_silence_s=cfg.vad.end_silence_ms / 1000,
             )
             self._closers.insert(0, routing_log.close)  # its last turn, before anything else stops
@@ -4120,6 +4150,7 @@ async def run_voice(config: AppConfig) -> int:
     app = App(config, voice=True, speak=True)
     try:
         assistant = await app.start()
+        _say_ready(config)
         app._run_task = asyncio.create_task(assistant.run(), name="assistant")
         try:
             await app._run_task
@@ -4132,6 +4163,21 @@ async def run_voice(config: AppConfig) -> int:
     finally:
         await app.close()
     return app.exit_code or 0
+
+
+READY_FILE = "data/ready.json"
+
+
+def _say_ready(config: AppConfig) -> None:
+    """``data/ready.json``: she's up (pid and time), for whoever started her and is waiting (the setup window)."""
+    import json
+
+    try:
+        path = config.resolve_path(READY_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"pid": os.getpid(), "at": time.time()}), encoding="utf-8")
+    except OSError:
+        log.debug("Couldn't write %s", READY_FILE, exc_info=True)
 
 
 async def run_text(config: AppConfig, speak: bool = False) -> None:

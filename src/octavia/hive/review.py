@@ -1,4 +1,4 @@
-"""The maintainer's side of the hivemind: looking at proposals from other installs and taking the good ones.
+"""The maintainer's side of the ETHER: looking at proposals from other installs and taking the good ones.
 
 ``review`` reads proposal files (from the inbox folder, or files sent some other way) and says, for each, what it is
 and anything wrong with it: personal things the sender's scrub missed (checked again with this install's values

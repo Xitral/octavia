@@ -24,133 +24,152 @@
         <main id="steps" class="steps">
           <!-- 0: waking -->
           <article class="step" data-step="intro" data-mood="idle">
-            <p class="kicker">a voice assistant, forming</p>
-            <h1>Let's form OCTAVIA.</h1>
-            <p>Seven small choices: how it thinks, how it hears you, how it sounds, who it is, where home is, what
-              it can reach, and a look at this PC. Each one wakes it a little more.</p>
-            <p class="dim">Nothing leaves this PC except to the services you choose. You can change all of it later
-              in its settings.</p>
-            <div class="actions"><button class="go" data-next>Begin</button></div>
+            <p class="kicker">setup</p>
+            <h1>Hello.</h1>
+            <p>Let's get OCTAVIA running. It takes a couple of minutes, and you can change any of it later.</p>
+            <div class="actions"><button class="go" data-next>Start</button></div>
           </article>
 
           <!-- 1: mind -->
           <article class="step" data-step="mind" data-mood="thinking" hidden>
-            <p class="kicker">1 / 7 · its mind</p>
-            <h2>How should OCTAVIA think?</h2>
+            <p class="kicker">1 / 7 &middot; mind</p>
+            <h2>What should it think with?</h2>
             <label class="choice"><input type="radio" name="brain" value="subscription" checked />
-              <span><b>My Claude account</b> <i class="tag">recommended</i><small>Pro or Max. A browser opens to
-                sign in once the setup is done. Nothing runs on anyone else's account.</small></span></label>
+              <span><b>My Claude account</b> <i class="tag">best</i><small>Pro or Max. You'll sign in at the end.</small></span></label>
             <label class="choice"><input type="radio" name="brain" value="api_key" />
-              <span><b>An Anthropic API key</b><small>Billed per use, from console.anthropic.com.</small></span></label>
-            <label class="field" data-when="brain=api_key" hidden>API key
+              <span><b>An Anthropic API key</b><small>Pay per use.</small></span></label>
+            <label class="field" data-when="brain=api_key" hidden>Key
               <input id="anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></label>
+            <label class="choice"><input type="radio" name="brain" value="other" />
+              <span><b>Another model</b><small>OpenAI, Gemini, Grok, Mistral, DeepSeek, Groq, OpenRouter, or one running
+                on this PC. Web search and self-improvement only work with Claude.</small></span></label>
+            <div data-when="brain=other" hidden>
+              <label class="field">Provider <select id="other-model"></select></label>
+              <label class="field" id="other-url-field">Address <input id="other-url" placeholder="http://localhost:8080/v1" /></label>
+              <label class="field">Model <input id="other-name" placeholder="its name there" /></label>
+              <label class="field" id="other-key-field">Key <input id="other-key" type="password" autocomplete="off" /></label>
+            </div>
             <div class="actions"><button data-back>Back</button><button class="go" data-next>Next</button></div>
           </article>
 
           <!-- 2: hearing -->
           <article class="step" data-step="hearing" data-mood="listening" hidden>
-            <p class="kicker">2 / 7 · its ears</p>
-            <h2>How does OCTAVIA hear you?</h2>
+            <p class="kicker">2 / 7 &middot; ears</p>
+            <h2>Mic and speakers</h2>
             <label class="field">Microphone <select id="mic"></select></label>
             <label class="field">Speakers <select id="speaker"></select></label>
             <label class="toggle"><input id="headphones" type="checkbox" checked />
-              <span>I use headphones <small>so you can interrupt it just by talking</small></span></label>
-            <p class="dim">Its ears run on this PC: your voice never leaves it, only the words it heard.</p>
+              <span>I wear headphones <small>Then you can talk over it to interrupt.</small></span></label>
+            <p class="dim">Listening happens on your PC. Only the words go out.</p>
             <div class="actions"><button data-back>Back</button><button class="go" data-next>Next</button></div>
           </article>
 
           <!-- 3: voice -->
           <article class="step" data-step="voice" data-mood="speaking" hidden>
-            <p class="kicker">3 / 7 · its voice</p>
-            <h2>How should OCTAVIA sound?</h2>
-            <label class="field">Fish Audio key <small>(fish.audio, API Keys: there's a free tier)</small>
+            <p class="kicker">3 / 7 &middot; voice</p>
+            <h2>Pick a voice</h2>
+            <label class="field">Fish Audio key <small>From fish.audio, under API Keys. There's a free tier.</small>
               <span class="row"><input id="fish" type="password" placeholder="paste it to hear the voices" autocomplete="off" />
                 <button id="check-key">Use it</button></span></label>
-            <p id="key-note" class="note dim">Without a key it speaks with Windows' own voice for now.</p>
+            <p id="key-note" class="note dim">No key? It'll use the Windows voice until you add one.</p>
             <div id="voices" class="voices"></div>
             <label class="field">Effect
               <select id="effect">
-                <option value="console" selected>console (its default)</option>
-                <option value="off">none</option>
-                <option value="radio">radio</option>
-                <option value="room">room</option>
+                <option value="console" selected>Console</option>
+                <option value="off">None</option>
+                <option value="radio">Radio</option>
+                <option value="room">Room</option>
               </select></label>
             <div class="actions"><button data-back>Back</button><button class="go" data-next>Next</button></div>
           </article>
 
           <!-- 4: identity -->
           <article class="step" data-step="identity" data-mood="confirming" hidden>
-            <p class="kicker">4 / 7 · who it is</p>
-            <h2>Who is it to you?</h2>
+            <p class="kicker">4 / 7 &middot; name</p>
+            <h2>Names</h2>
             <label class="field">Its name <input id="name" value="Octavia" maxlength="40" /></label>
-            <label class="field">The word that wakes it <input id="wake" value="octavia" maxlength="40" /></label>
-            <label class="field">What it calls you <input id="you" placeholder="your name, or leave it empty" maxlength="40" /></label>
-            <p class="dim">Its personality is plain text in personality/persona.md: rewrite it any time.</p>
+            <label class="field">Wake word <input id="wake" value="octavia" maxlength="40" /></label>
+            <label class="field">What it calls you <input id="you" placeholder="optional" maxlength="40" /></label>
+            <p class="dim">Its personality lives in personality/persona.md if you want to edit it.</p>
             <div class="actions"><button data-back>Back</button><button class="go" data-next>Next</button></div>
           </article>
 
           <!-- 5: home -->
           <article class="step" data-step="home" data-mood="idle" hidden>
-            <p class="kicker">5 / 7 · home</p>
-            <h2>Where is home?</h2>
-            <label class="field">Your town <span class="row"><input id="town" placeholder="e.g. Boone, North Carolina" />
+            <p class="kicker">5 / 7 &middot; home</p>
+            <h2>Where are you?</h2>
+            <label class="field">Town <span class="row"><input id="town" placeholder="e.g. Boone, North Carolina" />
               <button id="find">Find</button></span></label>
-            <p id="found" class="note dim">For the weather, directions and maps when you don't name a place. Skip it
-              and it asks when it matters.</p>
+            <p id="found" class="note dim">Used for weather and directions. You can skip this.</p>
             <div class="actions"><button data-back>Back</button><button class="go" data-next>Next</button></div>
           </article>
 
           <!-- 6: reach -->
           <article class="step" data-step="reach" data-mood="working" hidden>
-            <p class="kicker">6 / 7 · its reach</p>
-            <h2>What can OCTAVIA reach?</h2>
+            <p class="kicker">6 / 7 &middot; connections</p>
+            <h2>Connect anything?</h2>
             <p class="dim">All optional. Keys stay on this PC.</p>
-            <details><summary>Discord: text and call it from your phone</summary>
+            <details><summary>Discord <small class="inline">text and call it from your phone</small></summary>
               <ol class="howto">
-                <li>Open discord.com/developers/applications, "New Application" (any name).</li>
-                <li>Bot: "Reset Token" and copy it. Turn on "Message Content Intent".</li>
-                <li>OAuth2, URL Generator: tick "bot", then Send Messages, Read Message History, Attach Files, Connect
-                  and Speak. Open the link and add the bot to a server of yours.</li>
-                <li>Discord settings, Advanced: Developer Mode on; right-click your name, "Copy User ID".</li>
+                <li>At discord.com/developers/applications, make a New Application.</li>
+                <li>Under Bot, reset and copy the token, and turn on Message Content Intent.</li>
+                <li>Under OAuth2, URL Generator, tick "bot" plus Send Messages, Read Message History, Attach Files,
+                  Connect and Speak. Open the link and add the bot to your server.</li>
+                <li>In Discord's settings, turn on Developer Mode, then right-click your name and Copy User ID.</li>
               </ol>
               <label class="field">Bot token <input id="discord-token" type="password" autocomplete="off" /></label>
               <label class="field">Your user ID <input id="discord-owner" inputmode="numeric" /></label>
-              <p class="dim">It answers only you: anyone else is ignored, and on a call only your voice is heard.</p>
+              <p class="dim">It only answers you.</p>
             </details>
-            <details><summary>TickTick: your to-dos</summary>
-              <label class="field">API token <small>(TickTick on the web: Settings, Account &amp; Security)</small>
+            <details><summary>TickTick <small class="inline">to-dos</small></summary>
+              <label class="field">API token <small>TickTick on the web, Settings, Account &amp; Security</small>
                 <input id="ticktick" type="password" autocomplete="off" /></label></details>
-            <details><summary>Canvas: coursework and grades</summary>
+            <details><summary>Canvas <small class="inline">coursework and grades</small></summary>
               <label class="field">Your school's Canvas address <input id="canvas-url" placeholder="https://yourschool.instructure.com" /></label>
-              <label class="field">Access token <small>(Canvas: Account, Settings, + New Access Token)</small>
+              <label class="field">Access token <small>Canvas, Account, Settings, New Access Token</small>
                 <input id="canvas-token" type="password" autocomplete="off" /></label></details>
-            <details><summary>Gmail: new-mail alerts</summary>
-              <label class="field">Gmail address <input id="gmail" /></label>
-              <label class="field">App password <small>(myaccount.google.com/apppasswords)</small>
+            <details><summary>Gmail <small class="inline">new-mail alerts</small></summary>
+              <label class="field">Address <input id="gmail" /></label>
+              <label class="field">App password <small>myaccount.google.com/apppasswords</small>
                 <input id="gmail-password" type="password" autocomplete="off" /></label></details>
             <label class="toggle"><input id="share" type="checkbox" />
-              <span>Share what it learns with the hivemind
-                <small>Fixes, short lessons and requests it got wrong go to the maintainer, checked for anything
-                  personal first and reviewed by a person, so every OCTAVIA gets better from the others. Sharing means
-                  the maintainer may use, change, include and relicense what you send in OCTAVIA.</small></span></label>
+              <span>Share what it learns with the ETHER
+                <small>ETHER (Entangled Thought Harmonics and Emergent Resonance) is where every OCTAVIA pools what it
+                  learns. Fixes and mistakes it runs into get checked for anything personal, then a person reviews
+                  them before anyone else gets them. By sharing, you let the maintainer use what you send in
+                  OCTAVIA.</small></span></label>
             <div class="actions"><button data-back>Back</button><button class="go" data-next>Next</button></div>
           </article>
 
-          <!-- 7: this PC, then life -->
+          <!-- 7: this PC -->
           <article class="step" data-step="ready" data-mood="listening" hidden>
-            <p class="kicker">7 / 7 · this PC</p>
-            <h2>Ready to wake it?</h2>
+            <p class="kicker">7 / 7 &middot; this PC</p>
+            <h2>Looks good</h2>
             <ul id="hardware" class="hardware"></ul>
-            <div class="actions"><button data-back>Back</button><button id="awaken" class="go">Bring OCTAVIA to life</button></div>
+            <div class="actions"><button data-back>Back</button><button id="awaken" class="go">Finish</button></div>
           </article>
 
+          <!-- formed -->
           <article class="step" data-step="alive" data-mood="speaking" hidden>
-            <p class="kicker">formed</p>
-            <h1 id="alive-title">OCTAVIA is awake.</h1>
-            <p id="alive-text">Say its name to start talking.</p>
+            <p class="kicker">done</p>
+            <h1 id="alive-title">All set.</h1>
+            <p id="alive-text">Say its name to talk to it.</p>
             <ul id="notes" class="notes"></ul>
             <div class="actions"><button id="sign-in" class="go" hidden>Sign in to Claude</button>
-              <button id="finish" class="go">Finish</button></div>
+              <button id="finish" class="go">Start OCTAVIA</button></div>
+          </article>
+
+          <!-- waking: OCTAVIA itself starting -->
+          <article class="step" data-step="waking" data-mood="thinking" hidden>
+            <p class="kicker">starting</p>
+            <h1 id="waking-title">Waking up</h1>
+            <ol id="waking-steps" class="waking">
+              <li data-at="0">Starting</li>
+              <li data-at="6">Loading its ears</li>
+              <li data-at="18">Warming up its voice</li>
+              <li data-at="30">Connecting its mind</li>
+            </ol>
+            <p id="waking-note" class="dim">The first start takes the longest.</p>
           </article>
         </main>
       </div>

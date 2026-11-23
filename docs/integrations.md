@@ -32,6 +32,7 @@ when it starts, so restart it after adding one; the others work as soon as the f
 |---|---|---|---|
 | Its voice (Fish Audio) | `FISH_AUDIO_API_KEY` (required), `FISH_AUDIO_VOICE_ID` | [fish.audio/app/api-keys](https://fish.audio/app/api-keys); a voice's id from [fish.audio/app/discovery](https://fish.audio/app/discovery) or your own cloned voice | restart |
 | Claude (API instead of your subscription) | `ANTHROPIC_API_KEY` | only with `brain.claude.auth: api_key`; otherwise leave it out, it would bill the API. The subscription needs `uv run octavia login` instead | restart |
+| Another model (OpenAI, Gemini, Grok, Mistral, DeepSeek, Groq, OpenRouter...) | `OPENAI_API_KEY` | only with `brain.provider: openai_compatible`; `brain.openai_compatible.api_key_env` can name another variable (it's then read instead). A local server (Ollama, LM Studio) needs none | restart |
 | TickTick | `TICKTICK_API_TOKEN` | TickTick on the web: your avatar, Settings, Account & Security, API Token. See [ticktick.md](ticktick.md) | restart |
 | Canvas | `CANVAS_API_TOKEN`, `CANVAS_BASE_URL` | Canvas: Account, Settings, "+ New Access Token". The address is your school's Canvas site (`https://<school>.instructure.com`) | no |
 | Gmail | `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD` | turn on 2-Step Verification, then make an app password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) (never your usual password). Only used to read the inbox | no |

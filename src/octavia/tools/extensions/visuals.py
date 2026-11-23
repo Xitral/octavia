@@ -102,7 +102,9 @@ class ShowVisualArgs(Visual, ToolArgs):
 class ShowVisual(Tool):
     name = "show_visual"
     description = (
-        "Pop up a small panel on the user's screen while you explain something: formatted notes (Markdown, tables, "
+        "Pop up a small panel on the user's screen while you explain something. Say a sentence or two out loud "
+        "before this call, in the same reply (the gist, never that it's up yet): a panel takes about ten seconds to "
+        "write, and they hear nothing until it's written. What it can hold: formatted notes (Markdown, tables, "
         "TeX math), a diagram of boxes and arrows (processes, cycles, decisions, how parts connect), a bar, line or "
         "pie chart, key facts, numbered steps or a timeline, a side-by-side comparison, a scene of shapes, cards, "
         "arrows, text and emoji you place yourself (each one addressable, so you can change it later: prefer it to an "
