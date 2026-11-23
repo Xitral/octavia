@@ -79,6 +79,7 @@ if ($Here -and (Test-Path (Join-Path $Here "src\octavia\edition.py"))) {
     if ((Get-FileHash $Zip -Algorithm SHA256).Hash.ToLower() -ne $Release.sha256) { throw "The download doesn't match the release's checksum." }
     Expand-Archive $Zip -DestinationPath $Temp
     $Source = (Get-ChildItem $Temp -Directory | Where-Object { Test-Path (Join-Path $_.FullName "src\octavia\edition.py") } | Select-Object -First 1).FullName
+    if (-not $Source) { throw "The download doesn't hold OCTAVIA's files (an installer older than the release?). Download OCTAVIA-Setup.cmd again." }
 }
 
 # ---- 2. stop a running OCTAVIA and copy the program
@@ -90,8 +91,13 @@ if ((Test-Path $DataLink) -and ((Get-Item $DataLink -Force).Attributes -band [IO
     cmd /c rmdir "$DataLink" | Out-Null   # the junction only: what it points to is yours and stays
 }
 # Everything but the user's things and the environment (kept so a reinstall is quick).
-robocopy $Source $InstallDir /MIR /XD data .venv models node_modules /XF .env /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "Copying the program failed (robocopy $LASTEXITCODE)." }
+$CopyLog = Join-Path $env:TEMP "OCTAVIA-Setup-copy.log"
+robocopy $Source $InstallDir /MIR /XD data .venv models node_modules /XF .env /NP /R:2 /W:2 /LOG:$CopyLog | Out-Null
+if ($LASTEXITCODE -ge 8) {
+    # robocopy's own words: a locked file (OCTAVIA still running), access denied, a missing folder...
+    Get-Content $CopyLog -Tail 12 | Where-Object { $_ -match "ERROR|denied|cannot|process" } | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    throw "Copying the program failed (robocopy $LASTEXITCODE). If OCTAVIA is running, shut it down from its tray first. Details: $CopyLog"
+}
 Say "Program: $InstallDir"
 Say "Your memories and settings: $UserDir"
 
