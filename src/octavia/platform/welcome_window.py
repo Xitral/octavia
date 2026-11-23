@@ -64,6 +64,7 @@ class Session:
         self.choices: welcome.Choices | None = None
         self.done = False
         self.launched = False  # "Start OCTAVIA" started it (the installer then doesn't)
+        self._raw: dict[tuple[str, str], bytes] = {}  # (voice, line): the words as said, before any effect
 
     def model(self) -> dict[str, Any]:
         try:
@@ -95,9 +96,10 @@ class Session:
     def handle(self, msg: dict[str, Any]) -> None:
         kind = msg.get("type")
         if kind == "check-key":
-            threading.Thread(target=self._check_key, args=(str(msg.get("key", "")),), daemon=True).start()
+            args = (str(msg.get("key", "")), str(msg.get("effect", "console")))
+            threading.Thread(target=self._check_key, args=args, daemon=True).start()
         elif kind == "preview":
-            args = (str(msg.get("key", "")), str(msg.get("voice_id", "")))
+            args = (str(msg.get("key", "")), str(msg.get("voice_id", "")), str(msg.get("effect", "console")))
             threading.Thread(target=self._preview, args=args, daemon=True).start()
         elif kind == "geocode":
             threading.Thread(target=self._geocode, args=(str(msg.get("place", "")),), daemon=True).start()
@@ -133,26 +135,65 @@ class Session:
         self.done = True
         self.send({"type": "quit"})
 
-    def _check_key(self, key: str) -> None:
+    def _greeting(self, choices: welcome.Choices) -> None:
+        """Its first words, in the chosen voice, for when it's awake (the page plays them then)."""
+        key = choices.env.get("FISH_AUDIO_API_KEY", "")
+        tts = choices.config.get("tts", {})
+        voice = tts.get("fish_audio", {}).get("reference_id") or presets.DEFAULT.voice_id
+        who = choices.config.get("assistant", {})
+        if not key or presets.by_id(voice) is None:
+            return
+        text = presets.greeting(
+            str(who.get("name", "")), str(who.get("user_name", "")), str(who.get("wake_phrase", ""))
+        )
         try:
-            audio = presets.preview(key, presets.DEFAULT.voice_id)
+            audio = presets.with_effect(self._spoken(key, voice, text), str(tts.get("voice_effect", "console")))
+        except presets.PreviewError:
+            return
+        self.send({"type": "greeting", "audio": base64.b64encode(audio).decode()})
+
+    def _spoken(self, key: str, voice_id: str, text: str = presets.PREVIEW_LINE) -> bytes:
+        """The raw words in a voice, made once per voice and line (the effect is put on afterwards, so changing
+        it costs no new request)."""
+        cached = self._raw.get((voice_id, text))
+        if cached is None:
+            cached = presets.preview(key, voice_id, text, fmt="pcm")
+            self._raw[(voice_id, text)] = cached
+        return cached
+
+    def _check_key(self, key: str, effect: str = "console") -> None:
+        try:
+            raw = self._spoken(key, presets.DEFAULT.voice_id)
         except presets.PreviewError as exc:
             self.send({"type": "key-checked", "ok": False, "message": f"That key didn't work: {exc}."})
             return
         self.send({"type": "key-checked", "ok": True})
-        self.send({"type": "preview", "voice_id": presets.DEFAULT.voice_id, "audio": base64.b64encode(audio).decode()})
+        audio = presets.with_effect(raw, effect)
+        self.send({"type": "preview", "voice_id": presets.DEFAULT.voice_id, "effect": effect,
+                   "audio": base64.b64encode(audio).decode()})  # fmt: skip
 
-    def _preview(self, key: str, voice_id: str) -> None:
+    def _preview(self, key: str, voice_id: str, effect: str = "console") -> None:
         if presets.by_id(voice_id) is None:
             return
         try:
-            audio = presets.preview(key, voice_id)
+            raw = self._spoken(key, voice_id)
         except presets.PreviewError as exc:
             self.send({"type": "preview", "voice_id": voice_id, "message": f"Couldn't make the preview: {exc}."})
             return
-        self.send({"type": "preview", "voice_id": voice_id, "audio": base64.b64encode(audio).decode()})
+        audio = presets.with_effect(raw, effect)
+        self.send(
+            {"type": "preview", "voice_id": voice_id, "effect": effect, "audio": base64.b64encode(audio).decode()}
+        )
 
     def _geocode(self, place: str) -> None:
+        if place.strip() and self.services.places is not None:
+            matches = self.services.places(place)
+            if matches:
+                rows = [
+                    {"label": lab, "latitude": round(lat, 4), "longitude": round(lon, 4)} for lab, lat, lon in matches
+                ]
+                self.send({"type": "geocoded", "found": True, **rows[0], "others": rows[1:]})
+                return
         found = self.services.geocode(place) if place.strip() else None
         if found is None:
             self.send({"type": "geocoded", "found": False})
@@ -184,6 +225,7 @@ class Session:
         brain = config.get("brain", {})
         sign_in = brain.get("provider", "claude") == "claude" and brain.get("claude", {}).get("auth") == "subscription"
         self.send({"type": "saved", "ok": True, "notes": notes, "sign_in": sign_in})
+        threading.Thread(target=self._greeting, args=(choices,), daemon=True).start()
 
     def _sign_in(self) -> None:
         from octavia.config import load_config

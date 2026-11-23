@@ -30,6 +30,9 @@ avatar:
   rainboom: false
   trail: false
 
+circling:
+  enabled: false               # circling things with the mouse to mean "this": off until you turn it on in Settings
+
 self_improvement:
   enabled: false               # her fixing her own code needs git and uses your Claude usage: turn it on in Settings
 

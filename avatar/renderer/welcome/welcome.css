@@ -124,3 +124,6 @@ small.inline { display: inline; margin-left: 8px; }
 .waking li.done { color: var(--dim); }
 .waking li.done::before { background: var(--glow); }
 @keyframes pulse { 50% { opacity: 0.35; } }
+
+.others { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: -4px; }
+.others button { padding: 4px 10px; font-size: 12px; }

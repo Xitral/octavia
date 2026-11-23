@@ -98,6 +98,7 @@ class Services:
     login: Callable[[AppConfig], int]
     hardware: Callable[[], dict[str, Any]]
     providers: Callable[[], tuple[str, ...]]
+    places: Callable[[str], list[tuple[str, float, float]]] | None = None  # a few matches to choose from
 
 
 # ------------------------------------------------------------------------------------------------ helpers
@@ -130,30 +131,75 @@ def _list_devices() -> list[dict[str, Any]]:
     return out
 
 
-def _geocode(place: str) -> tuple[str, float, float] | None:
+# Canada's provinces and territories by their postal abbreviations (the US states are the weather tool's).
+_PROVINCES = {
+    "ab": "alberta", "bc": "british columbia", "mb": "manitoba", "nb": "new brunswick",
+    "nl": "newfoundland and labrador", "ns": "nova scotia", "nt": "northwest territories", "nu": "nunavut",
+    "on": "ontario", "pe": "prince edward island", "qc": "quebec", "sk": "saskatchewan", "yt": "yukon",
+}  # fmt: skip
+
+
+def _region_fits(result: dict[str, Any], qualifier: str) -> bool:
+    """Whether a result fits one part after the town's name: a state, province, region or country, written out or
+    abbreviated ("NC", "ON", "UK", "USA")."""
+    from octavia.tools.extensions.weather import _COUNTRY_ALIASES, _US_STATES
+
+    q = qualifier.lower().replace(".", "").strip()
+    wanted = {q, _US_STATES.get(q, q), _PROVINCES.get(q, q), _COUNTRY_ALIASES.get(q, q)}
+    fields = [result.get(k) for k in ("admin1", "admin2", "country", "country_code")]
+    have = {f.lower() for f in fields if isinstance(f, str)}
+    return bool(wanted & have) or any(len(w) > 3 and any(w in h for h in have) for w in wanted)
+
+
+def _split_place(place: str) -> tuple[str, list[str]]:
+    """The town and what narrows it: "Boone, NC" and "Boone NC" both give ("Boone", ["NC"])."""
+    from octavia.tools.extensions.weather import _COUNTRY_ALIASES, _US_STATES
+
+    parts = [p.strip() for p in place.split(",") if p.strip()]
+    if not parts:
+        return "", []
+    name, rest = parts[0], parts[1:]
+    words = name.split()
+    if not rest and len(words) > 1:
+        last = words[-1].lower().strip(".")
+        if last in _US_STATES or last in _PROVINCES or last in _COUNTRY_ALIASES or len(last) == 2:
+            name, rest = " ".join(words[:-1]), [words[-1]]
+    return name, rest
+
+
+def find_places(place: str, limit: int = 5) -> list[tuple[str, float, float]]:
+    """Towns matching what was typed, best first: (label, latitude, longitude). [] when none or offline."""
     import httpx
 
     from octavia.net import tls_context
 
-    name, *rest = [s.strip() for s in place.split(",")]
+    name, rest = _split_place(place)
+    if not name:
+        return []
     try:
         r = httpx.get(
             "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": name, "count": 10, "language": "en"},
+            params={"name": name, "count": 20, "language": "en"},
             timeout=10,
             verify=tls_context(),
         )
         r.raise_for_status()
         results = r.json().get("results") or []
     except Exception:
-        return None
-    want = " ".join(rest).lower()
-    for result in results:
-        region = f"{result.get('admin1', '')} {result.get('country', '')} {result.get('country_code', '')}".lower()
-        if not want or any(w in region for w in want.split()):
-            label = ", ".join(x for x in (result.get("name"), result.get("admin1") or result.get("country")) if x)
-            return label, float(result["latitude"]), float(result["longitude"])
-    return None
+        return []
+    fitting = [res for res in results if all(_region_fits(res, q) for q in rest)]
+    out = []
+    for res in fitting[:limit]:
+        region = res.get("admin1") or ""
+        country = res.get("country") or ""
+        label = ", ".join(x for x in (res.get("name"), region, country if res.get("country_code") != "US" else "") if x)
+        out.append((label, float(res["latitude"]), float(res["longitude"])))
+    return out
+
+
+def _geocode(place: str) -> tuple[str, float, float] | None:
+    found = find_places(place, limit=1)
+    return found[0] if found else None
 
 
 def _hardware() -> dict[str, Any]:
@@ -193,7 +239,7 @@ def _providers() -> tuple[str, ...]:
 def default_services() -> Services:
     from octavia.brain.claude_auth import login
 
-    return Services(_list_devices, _geocode, login, _hardware, _providers)
+    return Services(_list_devices, _geocode, login, _hardware, _providers, find_places)
 
 
 # ------------------------------------------------------------------------------------------------ the steps

@@ -128,16 +128,17 @@ class Engines:
         saved = user_settings.read(self.config.root)  # started on a kept "Fish only": her local voice isn't loaded
         return BRAIN_KEY in saved or VOICE_KEY in saved or EFFECT_KEY in saved
 
-    def summary(self) -> str:
+    def summary(self, effect: bool = True) -> str:
         """The picks in a few words for her tray's tip ("Claude only, Fish Audio only"), or "" when both are
-        automatic (or her local voice never loaded, which is no pick of today's)."""
+        automatic (or her local voice never loaded, which is no pick of today's). ``effect``: the voice effect too
+        (the tray leaves it out: it's a sound, not a state)."""
         parts = []
         if self.brain_now() != "auto":
             parts.append(BRAIN_NAMES[self.brain_now()])
         if self.local_voice and self.voice_now() != "local":
             parts.append(VOICE_NAMES[self.voice_now()])
-        if (effect := self.effect_now()) != voice_effects.OFF:
-            parts.append(f"{voice_effects.NAMES[effect]} voice effect")
+        if effect and (picked := self.effect_now()) != voice_effects.OFF:
+            parts.append(f"{voice_effects.NAMES[picked]} voice effect")
         return ", ".join(parts)
 
     def start_problems(self) -> str | None:

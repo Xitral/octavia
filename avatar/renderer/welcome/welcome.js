@@ -233,7 +233,7 @@ function speakThrough(audio) {
 
 function play(id, base64) {
   state.playing?.pause();
-  const audio = new Audio(`data:audio/mpeg;base64,${base64}`);
+  const audio = new Audio(`data:audio/wav;base64,${base64}`);
   state.playing = audio;
   $$('.voice').forEach((card) => card.classList.toggle('playing', card.dataset.id === id));
   audio.addEventListener('ended', () => $$('.voice').forEach((card) => card.classList.remove('playing')));
@@ -241,22 +241,29 @@ function play(id, base64) {
   audio.play().catch(() => {});
 }
 
+// A preview is kept per voice and effect: changing the effect is heard on the next play.
+const previewKey = (id) => `${id}|${$('#effect').value}`;
 function preview(id) {
-  if (state.previews[id]) return play(id, state.previews[id]);
+  if (state.previews[previewKey(id)]) return play(id, state.previews[previewKey(id)]);
   if (!state.keyOk) {
     $('#key-note').textContent = 'Paste a Fish Audio key above to hear the voices.';
     return;
   }
   $('#key-note').textContent = 'Making the preview with your key (a few seconds)...';
   orb({ type: 'state', state: 'thinking' });
-  host.send({ type: 'preview', voice_id: id, key: $('#fish').value.trim() });
+  host.send({ type: 'preview', voice_id: id, key: $('#fish').value.trim(), effect: $('#effect').value });
 }
 
 $('#check-key').addEventListener('click', () => {
   const key = $('#fish').value.trim();
   if (!key) return;
   $('#key-note').textContent = 'Checking the key...';
-  host.send({ type: 'check-key', key });
+  host.send({ type: 'check-key', key, effect: $('#effect').value });
+});
+
+// A new effect: hear it at once on the voice that's picked.
+$('#effect').addEventListener('change', () => {
+  if (state.keyOk && state.voice) preview(state.voice);
 });
 
 $('#find').addEventListener('click', () => {
@@ -404,7 +411,7 @@ const handlers = {
   },
   preview(msg) {
     if (msg.audio) {
-      state.previews[msg.voice_id] = msg.audio;
+      state.previews[`${msg.voice_id}|${msg.effect || 'console'}`] = msg.audio;
       $('#key-note').textContent = '';
       if (msg.voice_id === state.voice) play(msg.voice_id, msg.audio);
     } else {
@@ -417,6 +424,21 @@ const handlers = {
       state.home = { query: $('#town').value.trim(), latitude: msg.latitude, longitude: msg.longitude };
       $('#found').textContent = `Found ${msg.label}.`;
       orb({ type: 'moment', name: 'found' });
+      const others = $('#others');
+      others.innerHTML = '';
+      for (const row of msg.others || []) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = row.label;
+        b.addEventListener('click', () => {
+          $('#town').value = row.label;
+          state.home = { query: row.label, latitude: row.latitude, longitude: row.longitude };
+          $('#found').textContent = `Found ${row.label}.`;
+          others.innerHTML = '';
+        });
+        others.appendChild(b);
+      }
+      if (others.children.length) others.insertAdjacentHTML('afterbegin', '<span class="dim">Not it?</span>');
     } else {
       state.home = null;
       $('#found').textContent = "Couldn't find it, so it's kept as typed.";
@@ -445,10 +467,13 @@ const handlers = {
     form(1);
     orb({ type: 'moment', name: 'rainboom' });
     orb({ type: 'emotion', emotion: 'happy', intensity: 1, hold: 6 });
-    if (state.previews[state.voice]) play(state.voice, state.previews[state.voice]);
+  },
+  greeting(msg) {
+    state.greeting = msg.audio;
   },
   awake(msg) {
     clearInterval(wakingTimer);
+    if (msg.ok && state.greeting) play(state.voice, state.greeting);
     orb({ type: 'mouth', level: 0 });
     if (msg.ok) {
       $$('#waking-steps li').forEach((li) => li.classList.add('done'));

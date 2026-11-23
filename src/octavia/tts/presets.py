@@ -13,6 +13,16 @@ from dataclasses import dataclass
 # (2026-11-23), so the words carry it alone.
 PREVIEW_LINE = "Hey. I'm ready to help whenever you need me. Just say the word."
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
+
+
+def greeting(name: str, user_name: str = "", wake_word: str = "") -> str:
+    """What it says the first time it's awake (never the preview line): its own name, theirs if given, and how to
+    call it."""
+    hello = f"Hi, {user_name.strip()}." if user_name.strip() else "Hi."
+    call = (wake_word or name).strip() or "Octavia"
+    return f"{hello} I'm {name.strip() or 'Octavia'}. Whenever you need something, just say {call}."
+
+
 PREVIEW_MODEL = "s2.1-pro-free"
 
 
@@ -42,8 +52,12 @@ class PreviewError(RuntimeError):
     pass
 
 
-def preview(api_key: str, voice_id: str, text: str = PREVIEW_LINE, timeout_s: float = 45.0) -> bytes:
-    """The preview line in ``voice_id``, as MP3 bytes, made with the user's own Fish key. Raises PreviewError."""
+PREVIEW_RATE = 44100
+
+
+def preview(api_key: str, voice_id: str, text: str = PREVIEW_LINE, timeout_s: float = 45.0, fmt: str = "mp3") -> bytes:
+    """The preview line in ``voice_id`` (MP3 bytes, or 16-bit mono PCM at PREVIEW_RATE with ``fmt="pcm"``), made with
+    the user's own Fish key. Raises PreviewError."""
     import httpx
     import ormsgpack
 
@@ -51,7 +65,9 @@ def preview(api_key: str, voice_id: str, text: str = PREVIEW_LINE, timeout_s: fl
 
     if not api_key.strip():
         raise PreviewError("a Fish Audio key is needed to hear the voices")
-    request = {"text": text, "format": "mp3", "reference_id": voice_id, "normalize": True, "latency": "normal"}
+    request = {"text": text, "format": fmt, "reference_id": voice_id, "normalize": True, "latency": "normal"}
+    if fmt == "pcm":
+        request["sample_rate"] = PREVIEW_RATE
     try:
         r = httpx.post(
             FISH_TTS_URL,
@@ -73,3 +89,31 @@ def preview(api_key: str, voice_id: str, text: str = PREVIEW_LINE, timeout_s: fl
     if r.status_code != 200 or not r.content:
         raise PreviewError(f"Fish Audio answered HTTP {r.status_code}")
     return r.content
+
+
+def with_effect(pcm: bytes, effect: str, rate: int = PREVIEW_RATE) -> bytes:
+    """Raw 16-bit preview audio through the same voice effect the live voice uses (audio/voice_effects.py), as a
+    WAV file, so a preview sounds like it will."""
+    import io
+    import wave
+
+    import numpy as np
+
+    from octavia.audio import voice_effects
+
+    audio = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+    before = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
+    audio = voice_effects.apply(audio, voice_effects.picked(effect), rate)
+    after = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
+    if before > 0 and after > 0:  # as loud as without it, as the live voice is levelled after its effect
+        audio = audio * (before / after)
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if peak > 0.99:
+        audio = audio * (0.99 / peak)
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes((audio * 32767.0).astype("<i2").tobytes())
+    return out.getvalue()

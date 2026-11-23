@@ -307,12 +307,15 @@ class TrayMenu:
             parts.append(f"{'focus mode' if self._focusing() else 'snoozed'} until {_clock(until)}")
         if self._engines is not None:
             try:
-                picked = self._engines.summary()
+                picked = self._engines.summary(effect=False)
             except Exception:
                 picked = ""
             if picked:
                 parts.append(picked.lower())
-        return f"{self.name}: {', '.join(parts)}" if parts else self.name
+        from octavia import edition
+
+        name = self.name.upper() if edition.PUBLIC else self.name  # OCTAVIA, as the public build writes it
+        return f"{name}: {', '.join(parts)}" if parts else name
 
     def set_state(self, state: str) -> None:
         """Her state changed (``StateChanged``, on the loop): the icon follows."""
