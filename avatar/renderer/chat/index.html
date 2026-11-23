@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Octavia</title>
+    <link rel="stylesheet" href="chat.css" />
+    <script type="module" src="chat.js"></script>
+  </head>
+  <body>
+    <div id="frame" class="frame">
+      <header class="titlebar">
+        <span class="emblem" aria-hidden="true"><i class="heart"></i><i class="flare"></i></span>
+        <span class="brand"><b id="name">Octavia</b><span id="status" class="dim"></span></span>
+        <span class="drag"></span>
+        <button class="tool" id="open-search" title="Search everything you've said (Ctrl F)">&#xe721;</button>
+        <button class="tool" id="open-shelf" title="Her panels: pin, bring back">&#xe8a9;<i id="shelf-count" class="count" hidden></i></button>
+        <button class="tool" id="keep-top" title="Keep on top" aria-pressed="false">&#xe840;</button>
+        <button class="tool" id="make-mini" title="Small window" aria-pressed="false">&#xe73f;</button>
+        <button class="win" data-win="minimize" title="Minimize">&#xe921;</button>
+        <button class="win close" data-win="close" title="Close (Esc)">&#xe8bb;</button>
+      </header>
+
+      <div id="daybar" class="daybar" hidden>
+        <button id="day-back" class="step" title="The day before">&#xe76b;</button>
+        <span id="day-name"></span>
+        <button id="day-next" class="step" title="The day after">&#xe76c;</button>
+        <span class="drag"></span>
+        <button id="day-today" class="plain">Back to today</button>
+      </div>
+
+      <main id="log" class="log" tabindex="-1">
+        <button id="earlier" class="plain earlier" hidden>&#x2039; Earlier days</button>
+        <section id="today"></section>
+        <section id="past" hidden></section>
+      </main>
+      <button id="latest" class="latest" hidden>New below</button>
+
+      <section id="search" class="sheet" hidden>
+        <label class="find">
+          <span class="glyph">&#xe721;</span>
+          <input id="query" type="search" placeholder="Search what the two of you said" spellcheck="false" autocomplete="off" />
+          <button id="search-close" class="tool" title="Close (Esc)">&#xe8bb;</button>
+        </label>
+        <div id="results" class="results"></div>
+      </section>
+
+      <aside id="shelf" class="drawer" hidden>
+        <header class="drawer-head"><span>Her panels</span><button id="shelf-close" class="tool" title="Close (Esc)">&#xe8bb;</button></header>
+        <p id="shelf-note" class="note" hidden></p>
+        <div id="shelf-list" class="shelf-list"></div>
+      </aside>
+
+      <section id="asks" class="asks"></section>
+
+      <footer class="composer">
+        <textarea id="box" rows="1" placeholder="Type to her" spellcheck="true"></textarea>
+        <div class="actions">
+          <button id="stop" class="plain" title="Stop her talking (as your stop hotkey)" hidden>Stop</button>
+          <label class="say" title="She says her replies to what you type out loud"><input id="say" type="checkbox" /><i></i><span>Say it</span></label>
+          <button id="send" class="send" title="Send (Enter). Shift Enter starts a new line.">Send</button>
+        </div>
+      </footer>
+
+      <div id="drop" class="drop" hidden><span>Drop to ask her about it</span></div>
+    </div>
+  </body>
+</html>

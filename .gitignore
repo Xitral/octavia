@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# Secrets and personal overrides — never commit these
+.env
+.env.*
+!.env.example
+config/local.yaml
+config/*.local.yaml
+
+# Runtime data: SQLite DBs, logs, downloaded models, recordings
+data/
+models/
+*.log
+*.wav
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Avatar app dependencies (npm install in avatar/)
+avatar/node_modules/
+
+# temporary working copies of Claude Code agents
+.claude/worktrees/
+graphify-out/

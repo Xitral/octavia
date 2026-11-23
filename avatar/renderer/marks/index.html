@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Octavia marks</title>
+    <link rel="stylesheet" href="marks.css" />
+    <script type="module" src="marks.js"></script>
+  </head>
+  <body>
+    <svg id="board" class="board" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <!-- her bloom: a soft blue haze under every bright line -->
+        <filter id="bloom" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="3.2" result="soft" />
+          <feMerge><feMergeNode in="soft" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+        <!-- the PS2's picture inside a highlight: scanlines -->
+        <pattern id="scan" width="4" height="3" patternUnits="userSpaceOnUse">
+          <rect width="4" height="1" fill="rgba(124, 192, 255, 0.16)" />
+        </pattern>
+      </defs>
+      <g id="marks"></g>
+    </svg>
+  </body>
+</html>

@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Settings</title>
+    <link rel="stylesheet" href="settings.css" />
+    <script type="module" src="settings.js"></script>
+  </head>
+  <body>
+    <div id="frame" class="frame">
+      <header class="titlebar">
+        <span class="emblem" aria-hidden="true"><i class="heart"></i><i class="flare"></i></span>
+        <span class="brand"><b id="name">Octavia</b><span class="dim">settings</span></span>
+        <span class="drag"></span>
+        <button class="win" data-win="minimize" title="Minimize">&#xe921;</button>
+        <button class="win" data-win="maximize" title="Maximize">&#xe922;</button>
+        <button class="win close" data-win="close" title="Close (Esc)">&#xe8bb;</button>
+      </header>
+      <div class="body">
+        <aside class="side">
+          <label class="search">
+            <span class="glyph">&#xe721;</span>
+            <input id="search" type="search" placeholder="Search settings" spellcheck="false" autocomplete="off" />
+            <kbd>Ctrl F</kbd>
+          </label>
+          <nav id="nav" class="nav"><span id="marker" class="marker"></span></nav>
+        </aside>
+        <main class="main">
+          <div id="banner" class="banner" hidden></div>
+          <div class="head">
+            <h1 id="title"></h1>
+            <p id="about"></p>
+          </div>
+          <div id="content" class="content"></div>
+          <footer class="foot">
+            <span id="message" class="message">Changes are kept as you make them.</span>
+            <span class="hint">Esc closes</span>
+          </footer>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

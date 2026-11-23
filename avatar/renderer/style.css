@@ -1,0 +1,70 @@
+/* Everything outside the character must stay fully transparent: the window is see-through. */
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+#stage {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Faded in by the pop-in animation; hidden until then so a stale frame never flashes. */
+  opacity: 0;
+  cursor: default;
+  transition: filter 0.15s ease-out;
+}
+
+/* The pointer is on her and the window lets clicks through (seethrough.js): faded, so what's under her shows.
+   A filter, since her inline opacity belongs to the pop-in animation; the hit test reads the WebGL pixels, so
+   it's the same either way. */
+#stage.see-through {
+  filter: opacity(0.35);
+}
+
+/* The pointing ring and zip streaks, drawn behind her: she's in front of the screen. It never takes the
+   mouse, so the ring can't block a click on what it marks. */
+#marker {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* The model's credit, shown like a tooltip while the pointer rests on her at home (credit.js). A dark
+   label with a faint light edge reads on light and dark desktops alike. It never takes the mouse, so the
+   click-through hit test (her pixels in the WebGL canvas) is the same with it up. Shown with a quick fade,
+   hidden at once. */
+#credit {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  max-width: calc(100% - 8px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(24, 24, 32, 0.8);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+  color: #f4f4f8;
+  font: 11px/1.35 'Segoe UI', system-ui, sans-serif;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+}
+
+#credit.shown {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity 0.12s ease-out;
+}

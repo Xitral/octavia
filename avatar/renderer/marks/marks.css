@@ -1,0 +1,202 @@
+/* Her marks over the user's screen, in the look of her orb and her panels: luminous blue lines with a soft bloom and
+   a white-hot core, labels on near-black glass, highlights with PS2 scanlines, corner brackets on boxes. They unfold
+   in a few steps and then hold still: the window covers a whole monitor, and a transparent window is redrawn whole
+   for every frame anything in it moves, so the only thing that moves afterwards is a slow two-step pulse. */
+
+:root {
+  --line: #4c9cf5;
+  --glow: #7cc0ff;
+  --hot: #e2f0ff;
+  --glass: rgba(9, 14, 28, 0.9);
+  --edge: rgba(124, 192, 255, 0.7);
+  --sans: 'Segoe UI', system-ui, sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+.board {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: visible;
+}
+
+#marks.leaving {
+  animation: leave 0.16s steps(3, end) both;
+}
+
+.mark {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.mark.new {
+  animation: unfold 0.32s steps(5, end) both;
+}
+
+.mark.new .draw {
+  stroke-dasharray: 1;
+  animation: trace 0.36s steps(6, end) both;
+}
+
+.mark .glow {
+  fill: none;
+  stroke: var(--glow);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: url(#bloom);
+}
+
+.mark .core {
+  fill: none;
+  stroke: var(--hot);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+
+.mark .halo {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  opacity: 0.35;
+}
+
+.mark:not(.done) .halo {
+  animation: pulse 3.2s steps(2, jump-none) infinite;
+}
+
+.mark .wash {
+  fill: rgba(76, 156, 245, 0.2);
+}
+
+.mark .scan {
+  fill: url(#scan);
+}
+
+.mark .bracket {
+  fill: none;
+  stroke: var(--glow);
+  stroke-width: 2.6;
+  stroke-linecap: square;
+  filter: url(#bloom);
+}
+
+.mark .dot {
+  fill: var(--hot);
+  stroke: var(--glow);
+  stroke-width: 2;
+  filter: url(#bloom);
+}
+
+.mark .head {
+  fill: var(--glow);
+  stroke: var(--hot);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  filter: url(#bloom);
+}
+
+.mark .leader {
+  stroke: var(--edge);
+  stroke-width: 1.4;
+  stroke-dasharray: 3 3;
+}
+
+.mark .pill {
+  fill: var(--glass);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+
+.mark .pill-glow {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 4;
+  opacity: 0.25;
+  filter: url(#bloom);
+}
+
+.mark .text {
+  fill: var(--hot);
+  font: 600 15px var(--sans);
+  letter-spacing: 0.2px;
+  dominant-baseline: central;
+  paint-order: stroke;
+  stroke: rgba(76, 156, 245, 0.35);
+  stroke-width: 2.5px;
+}
+
+.mark .badge {
+  fill: var(--hot);
+  stroke: var(--glow);
+  stroke-width: 2;
+  filter: url(#bloom);
+}
+
+.mark .badge-n {
+  fill: #06142b;
+  font: 700 13px var(--sans);
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+/* A step already shown: still there to look back at, but quiet. */
+.mark.done {
+  opacity: 0.42;
+}
+
+.mark.done .glow,
+.mark.done .bracket,
+.mark.done .head,
+.mark.done .dot,
+.mark.done .pill-glow {
+  filter: none;
+}
+
+@keyframes unfold {
+  from {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes trace {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes pulse {
+  from {
+    opacity: 0.18;
+  }
+  to {
+    opacity: 0.5;
+  }
+}
+
+@keyframes leave {
+  to {
+    opacity: 0;
+  }
+}

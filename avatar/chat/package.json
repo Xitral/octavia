@@ -1,0 +1,7 @@
+{
+  "name": "octavia-chat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Octavia's chat window, driven over stdin/stdout by octavia.core.chat. Runs on the avatar app's Electron.",
+  "main": "main.js"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "octavia-marks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Octavia's marks on the user's screen (arrows, circles, boxes, highlights, labels), driven over stdin/stdout. Runs on the avatar app's Electron.",
+  "main": "main.js"
+}

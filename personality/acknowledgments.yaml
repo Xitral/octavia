@@ -1,0 +1,42 @@
+# Short things the assistant says the instant you finish talking, while it works on
+# the real answer, so you never sit in silence. They're spoken once in the configured
+# voice, cached on disk, and then play instantly (no network wait).
+#
+# Keep them to about a second: the real answer waits for the phrase to finish.
+# Don't promise results ("Done!" before anything is done).
+# Which list is used depends on what you said: a question, a request, or anything else.
+# Small talk ("thanks", "cool") gets no phrase, just the answer.
+# Edit freely; new or changed lines are synthesized the next time the assistant starts.
+# Keep them calm and flat, in the same tone as her replies: no exclamation marks or
+# cheerful openers (the voice reads "Okay!" as excited, and the reply after it isn't).
+
+question:
+  - "Let me check."
+  - "One sec."
+  - "Let me look."
+  - "Let me find out."
+
+request:
+  - "On it."
+  - "Sure."
+  - "Okay."
+  - "One sec."
+
+other:
+  - "Mm-hm."
+  - "Got it."
+  - "Okay."
+
+# When she starts searching the web before saying a word of her answer: a search
+# takes a while, so you hear why it's quiet.
+search:
+  - "Looking it up online."
+  - "Searching the web."
+  - "Checking online."
+
+# When she's been working for a while without a word (a long command, writing a
+# file, a screen task), so a two-minute wait doesn't sound like she hung.
+working:
+  - "Still on it."
+  - "Still working on it."
+  - "This one's taking a minute."

@@ -1,0 +1,42 @@
+# The public build's defaults, merged over config/default.yaml and under your own config/local.yaml
+# (src/octavia/edition.py). Don't edit this file: `octavia welcome` and the settings window write config/local.yaml
+# and data/settings.json, which win over it.
+
+assistant:
+  name: Octavia
+  wake_phrase: octavia
+  personality_file: "personality/persona.md"   # a generic persona: copy it and make it your own
+
+tts:
+  provider: fish_audio         # Fish Audio with your own key (FISH_AUDIO_API_KEY); `octavia welcome` can pick another
+  voice_effect: console        # her default sound: an old console's speaker (docs/voice-effects.md)
+  fallback: windows            # no Fish key, or Fish down: Windows' own voice says it
+  fish_audio:
+    # "Expressive Female Voice", a public voice in Fish Audio's library: any Fish account can use it.
+    reference_id: "f88993cf418c4fb798f1551bc51f0ef8"
+  local:                       # the voice made on your GPU (Qwen3-TTS): `octavia welcome` sets these when you pick it
+    python: ""
+    engine_dir: ""
+    model_dir: ""
+
+local_brain:
+  enabled: false               # a local model on your GPU, optional: see docs/local-brain.md
+  server: ""
+  model: ""
+
+avatar:
+  enabled: true
+  form: orb                    # the glowing orb: needs no character model
+  rainboom: false
+  trail: false
+
+self_improvement:
+  enabled: false               # her fixing her own code needs git and uses your Claude usage: turn it on in Settings
+
+discord_bridge:
+  enabled: false               # `octavia welcome` walks you through making your own bot
+
+hive:
+  # Signed releases from GitHub (docs/hive.md): checked against the maintainer's key below before anything applies.
+  feed: "https://github.com/Xitral/octavia/releases/latest/download"
+  public_key: "ff230d22d909341fbc25c5e77ca17400dc75ef7c79a96638e0c70ca6e9781419"

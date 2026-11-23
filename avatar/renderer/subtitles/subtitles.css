@@ -1,0 +1,504 @@
+/* Her subtitles, in her orb's look: thin, hazy blue-white words lit from inside, a glowing underline running into a
+   fine line down to her, a few sparks, and the PS2's picture over the words themselves (fine scanlines, Bayer dither,
+   grain, a slight fringe and soft bloom), the words in a PS2 menu panel of smoked glass so they read on a white
+   page as well as a dark one. Hazy and a little desaturated, as her orb's grade is. No gloss, no gold.
+   Her state drives it, as it drives her (subtitles.js): her voice, eased slowly into a steady glow (no flicker per
+   syllable: the user found pulsing light distracting), brightens the underline and the line to her and thickens the
+   haze round the words (opacity and transform only, set straight on those layers, so the compositor does it without
+   redrawing anything); a sentence's feeling lets it rise in light or settle in heavy, quick or slow, with
+   a fuller or fainter bloom (--l lift and --e energy, fixed on each line as it comes), and leans her glow a little
+   cyan or violet (--cyan, --violet), easing over as the orb does.
+   Nothing loops: a see-through window is redrawn whole for every frame anything in it moves, so when she's quiet
+   the window is still. And nothing that changes reaches the words themselves: their filters are the costly part to
+   redraw, so the lean of her glow eases only through .glow (the lines and sparks round the words; on the root it
+   redrew the whole page every frame of the ease, 25% of the GPU: tools/subtitles-clip.mjs --measure), and a line's
+   feeling is set once, as it arrives, never animated. */
+
+/* Registered, so a change of feeling eases across rather than snapping. */
+@property --cyan {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
+@property --violet {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
+:root {
+  --hot: rgba(228, 236, 247, 0.95);
+  --sans: 'Segoe UI Semilight', 'Segoe UI Light', 'Segoe UI', system-ui, sans-serif;
+  --mono: Consolas, 'Cascadia Mono', monospace;
+  --math: 'Cambria Math', Cambria, 'Segoe UI', serif;
+}
+
+/* The pointer is on the words (seethrough.js, as on her): faded, so what's under them shows. On the body, never on
+   anything carrying the text filters, and only while it fades: the rest of the time nothing here redraws. */
+body {
+  transition: opacity 0.15s ease-out;
+}
+
+html.see-through body {
+  opacity: 0.35;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.32s ease-out;
+}
+
+.stage.on {
+  opacity: 1;
+}
+
+.stage.fading {
+  opacity: 0;
+  transition: opacity 0.9s ease-in;
+}
+
+.stage.fading.cut {
+  transition-duration: 0.26s;
+}
+
+/* ------------------------------------------------------------ the words */
+
+.clip {
+  position: absolute;
+  right: calc(100% - var(--ux));
+  bottom: calc(100% - var(--uy) + var(--gap));
+  max-width: var(--max-w);
+}
+
+.stage.flip-x .clip {
+  right: auto;
+  left: var(--ux);
+}
+
+.stage.flip-y .clip {
+  bottom: auto;
+  top: calc(var(--uy) + var(--gap));
+}
+
+.view {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+/* The box round the words: a PS2 menu panel, hazy dark-blue glass with her scanlines and grain, a thin cool rim with
+   a soft glow round it and a faint lit top edge, and corner ticks in her light. Translucent, but dark enough that the
+   words read on a white page. subtitles.js (fitUnderline) sizes it to the rows that stay, as laid out (a row leaving fades
+   above it; one gliding up glides into it), only when a row comes or goes: nothing in it moves, so it's drawn once a
+   row. */
+.panel {
+  position: absolute;
+  display: none;
+  z-index: -1;
+  box-sizing: border-box;
+  pointer-events: none;
+  border-radius: 3px;
+  border: 1px solid rgba(150, 186, 236, 0.3);
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.18) 0 1px, transparent 1px 2px),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.55 0 0 0 0 0.66 0 0 0 0 0.86 0 0 0 0.11 0'/></filter><rect width='96' height='96' filter='url(%23n)'/></svg>"),
+    radial-gradient(130% 120% at 50% -20%, rgba(120, 165, 225, 0.16), transparent 60%),
+    radial-gradient(120% 140% at 90% 110%, rgba(98, 142, 204, 0.14), transparent 65%),
+    linear-gradient(180deg, rgba(14, 22, 41, 0.86), rgba(8, 13, 27, 0.9));
+  box-shadow:
+    0 0 0 1px rgba(4, 8, 18, 0.55),
+    0 0 14px rgba(98, 142, 204, 0.3),
+    0 0 34px rgba(98, 142, 204, 0.1),
+    inset 0 1px 0 rgba(205, 225, 255, 0.12),
+    inset 0 0 22px rgba(98, 142, 204, 0.12);
+  image-rendering: pixelated;
+}
+
+.panel.up {
+  display: block;
+}
+
+/* the corner ticks, just inside the rim */
+.panel::after {
+  --tick: rgba(170, 210, 255, 0.55);
+  content: '';
+  position: absolute;
+  inset: 2px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--tick), var(--tick)) top left / 7px 1px,
+    linear-gradient(var(--tick), var(--tick)) top left / 1px 7px,
+    linear-gradient(var(--tick), var(--tick)) top right / 7px 1px,
+    linear-gradient(var(--tick), var(--tick)) top right / 1px 7px,
+    linear-gradient(var(--tick), var(--tick)) bottom left / 7px 1px,
+    linear-gradient(var(--tick), var(--tick)) bottom left / 1px 7px,
+    linear-gradient(var(--tick), var(--tick)) bottom right / 7px 1px,
+    linear-gradient(var(--tick), var(--tick)) bottom right / 1px 7px;
+  background-repeat: no-repeat;
+}
+
+/* Only a row taller than the room is clipped, and its top melts away rather than being cut: otherwise nothing
+   clips the words or their glow as rows glide up. The words, not the box round them. */
+.view.tall .lines {
+  max-height: var(--max-h);
+  overflow: hidden;
+  mask-image: linear-gradient(180deg, transparent 0, #000 26px);
+}
+
+.lines {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  max-width: var(--max-w);
+  will-change: transform;
+}
+
+.line {
+  position: relative;
+  isolation: isolate;
+  font: 17px/1.42 var(--sans);
+  letter-spacing: 0.15px;
+  padding: 1px 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transition:
+    transform 0.42s cubic-bezier(0.22, 0.8, 0.3, 1),
+    opacity 0.42s ease;
+  /* quicker when she's lively; not "both": it'd hold the glide up */
+  animation: arrive calc(0.5s - 0.16s * var(--e, 0)) cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+}
+
+/* A word (or a formula, whole): unseen until she says it, lit while she does, then settled. Its own fill, so each can
+   light alone; an inline-block, as an inline box's fill would stop at the font's height, and a fraction's lower half
+   with it. Only its opacity changes, once each way and at once: a fade, under the filters on .ink, redrew the row
+   every frame she spoke (GPU 3D 9.7% against 1.8%; 2.5% without: tools/subtitles-clip.mjs --measure). No pulse. */
+.w {
+  display: inline-block;
+  opacity: 0;
+  /* the PS2 picture inside the letters: scanlines, a 4x4 Bayer dither and grain over a cool white-to-blue fill,
+     pinned to the window so every word and symbol shares one pattern */
+  background:
+    repeating-linear-gradient(0deg, rgba(20, 34, 62, 0.2) 0 1px, transparent 1px 2px),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' fill='%232c4870'><rect x='0' y='0' width='1' height='1' fill-opacity='0.00'/><rect x='1' y='0' width='1' height='1' fill-opacity='0.14'/><rect x='2' y='0' width='1' height='1' fill-opacity='0.04'/><rect x='3' y='0' width='1' height='1' fill-opacity='0.17'/><rect x='0' y='1' width='1' height='1' fill-opacity='0.20'/><rect x='1' y='1' width='1' height='1' fill-opacity='0.07'/><rect x='2' y='1' width='1' height='1' fill-opacity='0.23'/><rect x='3' y='1' width='1' height='1' fill-opacity='0.10'/><rect x='0' y='2' width='1' height='1' fill-opacity='0.05'/><rect x='1' y='2' width='1' height='1' fill-opacity='0.18'/><rect x='2' y='2' width='1' height='1' fill-opacity='0.01'/><rect x='3' y='2' width='1' height='1' fill-opacity='0.15'/><rect x='0' y='3' width='1' height='1' fill-opacity='0.25'/><rect x='1' y='3' width='1' height='1' fill-opacity='0.12'/><rect x='2' y='3' width='1' height='1' fill-opacity='0.21'/><rect x='3' y='3' width='1' height='1' fill-opacity='0.09'/></svg>") 0 0 / 4px 4px,
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.2 0 0 0 0 0.28 0 0 0 0 0.45 0 0 0 0.22 0'/></filter><rect width='96' height='96' filter='url(%23n)'/></svg>"),
+    linear-gradient(180deg, #edf2f9 0%, #dbe5f2 55%, #c2d1e5 100%); /* soft, not a glossy white top */
+  background-attachment: fixed;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* said: settled, a step down from the word she's on */
+.w.said {
+  opacity: 0.8;
+}
+
+/* the word she's saying: full, and a touch whiter and cooler, as if nearer her light (hazy, never glossy) */
+.w.now {
+  opacity: 1;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(20, 34, 62, 0.14) 0 1px, transparent 1px 2px),
+    linear-gradient(180deg, #f7faff 0%, #e6effb 55%, #cfe0f2 100%);
+  background-size: auto; /* the dither layer's 4px size must not carry over onto the fill */
+  background-position: 0 0;
+}
+
+.ink {
+  display: block;
+  /* a dark edge first, so the letters hold on white and busy screens, then bloom (fuller when she's lively) and the
+     faint colour fringe of a CRT */
+  filter: drop-shadow(0 0 0.8px rgba(3, 6, 15, 0.95)) drop-shadow(0 1px 1.5px rgba(3, 6, 15, 0.7))
+    drop-shadow(0.7px 0 0 rgba(220, 120, 150, 0.18)) drop-shadow(-0.7px 0 0 rgba(120, 170, 230, 0.3))
+    drop-shadow(0 0 4px rgba(98, 142, 204, calc(0.62 + 0.16 * var(--e, 0))))
+    drop-shadow(0 0 11px rgba(98, 142, 204, calc(0.3 + 0.12 * var(--e, 0))));
+  /* a heavy sentence sits a little dimmer, a light one full */
+  opacity: calc(0.93 + 0.09 * var(--l, 0));
+  transition: opacity 0.42s ease;
+}
+
+/* the row before: its words dimmed */
+.line.past .ink {
+  opacity: calc(0.72 + 0.06 * var(--l, 0));
+}
+
+/* A row is laid out once, with all its words (rowsOf in subtitles.js), so it never rewraps as they come in. A unit
+   wider than the room (a long bit of code) wraps inside itself, as it did when measured. */
+.lines .line {
+  white-space: nowrap;
+}
+
+.w {
+  white-space: normal;
+  max-width: var(--max-w);
+}
+
+.measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  width: max-content;
+  max-width: var(--max-w);
+}
+
+/* out over the top of the box, drifting up as it goes: never just gone */
+.line.leaving {
+  opacity: 0;
+  transform: translateY(-9px);
+}
+
+/* A word's ghost (materialize in subtitles.js): it settles onto the word from a little above and a little larger,
+   blurred to sharp, cool and pale, with a faint red and cyan fringe and every other line dimmed (interlaced), then
+   fades as the word itself shows under it. Its own layer, outside the text's filters; subtitles.js moves its
+   transform, opacity and blur on her voice's own 30 fps beat (a CSS animation ran at the display's 60, redrawing the
+   see-through window twice as often: about 10% more of a CPU core while she talked). */
+.ghost {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  white-space: normal; /* as its word, which wraps inside itself only when wider than the room */
+  max-width: var(--max-w);
+  color: rgba(214, 236, 255, 0.95);
+  text-shadow:
+    0 0 5px rgba(150, 205, 255, 1),
+    0 0 12px rgba(110, 170, 240, 0.85),
+    0 0 26px rgba(98, 142, 204, 0.55),
+    1.4px 0 0 rgba(255, 130, 175, 0.35),
+    -1.4px 0 0 rgba(110, 205, 255, 0.5);
+  -webkit-mask-image: repeating-linear-gradient(0deg, #000 0 1px, rgba(0, 0, 0, 0.45) 1px 2px);
+  mask-image: repeating-linear-gradient(0deg, #000 0 1px, rgba(0, 0, 0, 0.45) 1px 2px);
+  transform-origin: 50% 70%;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+/* a light row rises in from below, a heavy one settles in from above; faint for its first moments, while the row
+   before glides up out of its way */
+@keyframes arrive {
+  0% {
+    opacity: 0;
+    transform: translateY(calc(4px + 7px * var(--l, 0)));
+  }
+  30% {
+    opacity: 0.12;
+  }
+}
+
+/* A faint haze of her light round the words, as round her orb: it drifts as she speaks, stops when she stops, and
+   thickens with her voice. */
+.haze {
+  position: absolute;
+  inset: -30px -44px; /* past the box round the words, which would hide it */
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.35;
+  will-change: opacity;
+  -webkit-mask-image: radial-gradient(closest-side, #000 30%, transparent);
+  mask-image: radial-gradient(closest-side, #000 30%, transparent);
+}
+
+.haze .drift {
+  position: absolute;
+  inset: 0 -96px;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><filter id='n' color-interpolation-filters='sRGB'><feTurbulence type='fractalNoise' baseFrequency='0.021' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.64 0 0 0 0 0.75 0 0 0 0 0.94 0 0 0 0.42 -0.1'/></filter><rect width='96' height='96' filter='url(%23n)'/></svg>")
+    0 0 / 96px 96px;
+  image-rendering: pixelated;
+  will-change: transform;
+}
+
+.line strong {
+  font-weight: 600;
+}
+
+.ink code,
+.ghost code {
+  font: 15.5px var(--mono);
+  padding: 0 1px;
+}
+
+.math {
+  font-family: var(--math);
+  font-size: 1.06em;
+  white-space: nowrap;
+}
+
+.math .var {
+  font-style: italic;
+  padding-right: 0.07em; /* an italic f leans into the bracket after it */
+}
+
+.frac {
+  display: inline-flex;
+  flex-direction: column;
+  vertical-align: middle;
+  text-align: center;
+  font-size: 0.86em;
+  line-height: 1.15;
+  margin: 0 2px;
+}
+
+/* the bars are drawn, not lettered, so they take her light themselves */
+.frac .num {
+  border-bottom: 1px solid rgba(206, 230, 255, 0.85);
+  padding: 0 2px;
+}
+
+.frac .den {
+  padding: 0 2px;
+}
+
+.sqrt .radicand {
+  border-top: 1px solid rgba(206, 230, 255, 0.85);
+  padding: 0 1px;
+}
+
+sup,
+sub {
+  font-size: 0.72em;
+}
+
+/* ------------------------------------------------------------ the underline, the line to her and the sparks */
+
+.glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* her hazy blue, leaning cyan when she's light and violet when she's heavy */
+  --line: color-mix(in oklab, color-mix(in oklab, rgb(98 142 204), rgb(104 196 222) calc(var(--cyan) * 100%)), rgb(140 124 222) calc(var(--violet) * 100%));
+  --glow: color-mix(in oklab, color-mix(in oklab, rgb(142 178 226), rgb(140 216 236) calc(var(--cyan) * 100%)), rgb(170 156 236) calc(var(--violet) * 100%));
+  transition:
+    --cyan 1.4s ease,
+    --violet 1.4s ease;
+}
+
+.underline {
+  position: absolute;
+  z-index: 0;
+  top: var(--uy);
+  left: calc(var(--ux) - var(--line-w, 0px));
+  width: var(--line-w, 0px);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--line) 55%, transparent) 18%, var(--glow) 70%, var(--hot));
+  box-shadow:
+    0 0 4px color-mix(in srgb, var(--glow) 75%, transparent),
+    0 0 10px color-mix(in srgb, var(--line) 40%, transparent),
+    0 1px 1px rgba(6, 10, 22, 0.4); /* a dark edge under it, as under the letters, so it holds on a white page */
+  transform-origin: right center;
+  transform: scaleX(0);
+  transition:
+    transform 0.45s cubic-bezier(0.22, 0.8, 0.3, 1) 0.12s,
+    width 0.35s ease,
+    left 0.35s ease;
+}
+
+.stage.flip-x .underline {
+  left: var(--ux);
+  background: linear-gradient(270deg, transparent, color-mix(in srgb, var(--line) 55%, transparent) 18%, var(--glow) 70%, var(--hot));
+  transform-origin: left center;
+}
+
+/* her voice lights the underline: a brighter copy over it, as bright as she's loud */
+.underline .lit {
+  position: absolute;
+  inset: 0;
+  background: inherit;
+  box-shadow:
+    0 0 5px var(--glow),
+    0 0 14px color-mix(in srgb, var(--line) 70%, transparent);
+  opacity: 0;
+  will-change: opacity;
+}
+
+.stage.on .underline {
+  transform: scaleX(1);
+}
+
+.wire {
+  opacity: 0.7;
+  will-change: opacity;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* her plain hazy blue: the window-wide line doesn't lean with her feelings, as redrawing it through an ease costs a
+   full-window filter every frame */
+.connector {
+  stroke: rgb(142, 178, 226);
+  stroke-width: 1;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 2px rgba(142, 178, 226, 0.85)) drop-shadow(0 0 6px rgba(98, 142, 204, 0.5));
+  stroke-dasharray: 60;
+  stroke-dashoffset: 60;
+  transition: stroke-dashoffset 0.3s ease-out;
+}
+
+.stage.on .connector {
+  stroke-dashoffset: 0;
+}
+
+.spark {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  border-radius: 50%;
+  background: var(--hot);
+  box-shadow:
+    0 0 3px rgba(236, 242, 250, 0.9),
+    0 0 7px var(--glow);
+  opacity: 0;
+}
+
+.dust {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  margin: -1px 0 0 -1px;
+  background: #d6e2f2;
+  box-shadow: 0 0 3px var(--glow);
+  opacity: 0.55;
+  image-rendering: pixelated;
+}
+
+.dust:nth-of-type(2n) {
+  opacity: 0.32;
+}
+
+.spark.go {
+  animation: twinkle calc(1s - 0.25s * var(--e, 0)) ease-out both;
+}
+
+@keyframes twinkle {
+  0% {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}

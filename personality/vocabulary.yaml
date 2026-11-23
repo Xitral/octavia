@@ -1,0 +1,18 @@
+# Speech vocabulary: names and words speech recognition gets wrong, fixed in what it heard
+# before the assistant reads it.
+#
+# A term on its own fixes capitals and spacing ("tick tick" -> "TickTick") and near misses of
+# longer terms. For anything that comes out very differently, list how it sounds or what it
+# gets heard as under sounds_like (in quotes):
+#
+#   - "Octavia"
+#   - term: "Saoirse"
+#     sounds_like: ["sear sha", "seer sha"]
+#
+# Add your own name, your friends', your school's. Edit freely; changes apply to the next thing you say.
+
+- term: "Octavia"
+  sounds_like: ["octavio", "oktavia", "octavian"]
+- term: "TickTick"
+  sounds_like: ["tik tik", "tic tic", "tick-tick"]
+- "Canvas"

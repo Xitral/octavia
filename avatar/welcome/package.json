@@ -1,0 +1,7 @@
+{
+  "name": "octavia-welcome",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OCTAVIA's guided setup window, driven over stdin/stdout by octavia.platform.welcome_window. Runs on the avatar app's Electron.",
+  "main": "main.js"
+}

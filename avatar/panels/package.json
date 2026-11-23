@@ -1,0 +1,7 @@
+{
+  "name": "octavia-panels",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Octavia's pop-up panels (diagrams, charts, formatted notes), driven over stdin/stdout. Runs on the avatar app's Electron.",
+  "main": "main.js"
+}
