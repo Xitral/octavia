@@ -127,7 +127,7 @@ class DirectionsArgs(ToolArgs):
     destination: str = Field(
         min_length=1,
         max_length=200,
-        description="Where to go: an address, a business or landmark, or a town, e.g. 'the airport' or 'Asheville, NC'.",
+        description="Where to go: an address, a business or landmark, or a town, e.g. 'the airport' or 'Seattle, WA'.",
     )
     origin: str | None = Field(
         default=None,

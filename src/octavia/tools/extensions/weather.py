@@ -122,7 +122,7 @@ def _label(result: dict[str, Any]) -> str:
 
 
 def _is_home(location: str, home: str = "") -> bool:
-    """Whether ``location`` names the home place ("Boone" or "Boone, NC" for "Boone, North Carolina")."""
+    """Whether ``location`` names the home place ("Portland" or "Portland, OR" for "Portland, Oregon")."""
     parts = [w.strip() for w in home.split(",") if w.strip()]
     if not parts:
         return False
@@ -137,7 +137,7 @@ class WeatherArgs(ToolArgs):
     location: str | None = Field(
         default=None,
         max_length=100,
-        description="City, e.g. 'Boone, NC'. Omit for home ({{home}}).",
+        description="City, e.g. 'Portland, OR'. Omit for home ({{home}}).",
     )
     days: int = Field(default=3, ge=1, le=7, description="1 = today only.")
     hours: int = Field(default=12, ge=0, le=48, description="Hourly forecast hours (0 = none).")
@@ -162,7 +162,7 @@ class GetWeather(Tool):
 
     async def _find(self, client: httpx.AsyncClient, location: str) -> Place:
         """The place a spoken location means: the name is searched and anything after a comma (a state, region or
-        country) picks among the results. "Boone NC" without a comma is tried as "Boone, NC" too."""
+        country) picks among the results. "Portland OR" without a comma is tried as "Portland, OR" too."""
         name, *qualifiers = [p.strip() for p in location.split(",") if p.strip()]
         attempts = [(name, qualifiers)]
         if not qualifiers and " " in name:

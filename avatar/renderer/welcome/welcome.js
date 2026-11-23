@@ -2,6 +2,8 @@
 // the voices heard through it, and a flare when it comes to life. The setup process (octavia.platform.welcome_window)
 // does the real work: devices, previews, finding the town, saving. Nothing is saved until "Bring OCTAVIA to life".
 
+import { GUIDES, picture } from './guides.js';
+
 const host = window.welcomeHost;
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
@@ -50,11 +52,12 @@ const WHISPERS = {
   ready: 'almost...',
   alive: '',
   waking: '',
+  guide: '',
 };
 
 // ---------------------------------------------------------------- steps
 const dots = $('#dots');
-const CHOICES = steps.filter((step) => !['intro', 'alive', 'waking'].includes(step.dataset.step)).length;
+const CHOICES = steps.filter((step) => !['intro', 'alive', 'waking', 'guide'].includes(step.dataset.step)).length;
 for (let i = 0; i < CHOICES; i += 1) dots.appendChild(document.createElement('li'));
 const indexOf = (name) => steps.findIndex((step) => step.dataset.step === name);
 
@@ -67,7 +70,7 @@ function show(index) {
   [...dots.children].forEach((dot, i) => dot.classList.toggle('on', i < state.at));
   form(Math.min(1, state.at / CHOICES));
   orb({ type: 'state', state: step.dataset.mood || 'idle' });
-  if (state.at > 0) orb({ type: 'moment', name: 'step' });
+  if (state.at > 0 && step.dataset.step !== 'guide') orb({ type: 'moment', name: 'step' });
   whisper(WHISPERS[step.dataset.step]);
   step.querySelector('input:not([type=radio]):not([type=checkbox]), select')?.focus({ preventScroll: true });
 }
@@ -75,6 +78,10 @@ function show(index) {
 document.addEventListener('click', (event) => {
   const t = event.target.closest('button');
   if (!t) return;
+  if (t.matches('.guide-me')) {
+    event.preventDefault();
+    return startGuide(t.dataset.guide);
+  }
   if (t.matches('[data-next]')) show(state.at + 1);
   else if (t.matches('[data-back]')) show(state.at - 1);
   else if (t.matches('[data-win]')) host.window(t.dataset.win);
@@ -381,6 +388,124 @@ function wakingClock() {
   tick();
 }
 
+// ---------------------------------------------------------------- guided connections (guides.js)
+// One step at a time: it says the step (in its voice when there's a key), opens the page, shows what to look for,
+// and checks what's pasted at once. "I'm stuck" asks its model when one is reachable, else shows the step's tips.
+const guide = { name: null, i: 0, from: 0, said: {}, sayId: 0 };
+
+function startGuide(name) {
+  if (!GUIDES[name]) return;
+  Object.assign(guide, { name, i: 0, from: state.at });
+  show(indexOf('guide'));
+  guideStep();
+}
+
+function endGuide() {
+  const from = guide.from;
+  guide.name = null;
+  show(from);
+}
+
+function speak(text) {
+  const fish = $('#fish').value.trim();
+  if (!state.keyOk || !fish || !state.voice) return;
+  const cached = guide.said[`${state.voice}|${$('#effect').value}|${text}`];
+  if (cached) return play(state.voice, cached);
+  guide.sayId += 1;
+  host.send({ type: 'say', id: guide.sayId, text, key: fish, voice_id: state.voice, effect: $('#effect').value });
+  guide.pending = { id: guide.sayId, text };
+}
+
+function guideStep() {
+  const g = GUIDES[guide.name];
+  const step = g.steps[guide.i];
+  $('#g-kicker').textContent = `${g.title} · ${guide.i + 1} / ${g.steps.length}`;
+  $('#g-title').textContent = guide.i === 0 ? `Connecting ${g.title}` : g.title;
+  $('#g-pic').innerHTML = step.picture ? picture(step.picture) : '';
+  $('#g-say').textContent = step.say;
+  $('#g-then').textContent = step.then || '';
+  $('#g-help').hidden = true;
+  $('#g-answer').textContent = '';
+  $('#g-open').hidden = !step.open;
+  $('#g-next').textContent = guide.i === g.steps.length - 1 ? 'Done' : 'Next';
+  const box = $('#g-field');
+  box.innerHTML = '';
+  if (step.field) {
+    const source = $(`#${step.field.id}`);
+    const input = document.createElement('input');
+    input.type = source?.type === 'password' ? 'password' : 'text';
+    input.placeholder = step.field.label || '';
+    input.value = source?.value || '';
+    input.autocomplete = 'off';
+    const note = document.createElement('p');
+    note.className = 'note';
+    box.append(input, note);
+    let timer = null;
+    const checkNow = () => {
+      if (!input.value.trim()) return;
+      note.textContent = 'Checking...';
+      note.className = 'note dim';
+      if (step.field.check === 'fish') {
+        state.guideFish = note;
+        host.send({ type: 'check-key', key: input.value.trim(), effect: $('#effect').value });
+      } else if (step.field.check) {
+        const extra = step.field.extra ? $(`#${step.field.extra}`)?.value || '' : '';
+        state.guideNote = note;
+        host.send({ type: 'check', what: step.field.check, value: input.value.trim(), extra });
+      } else {
+        note.textContent = '';
+      }
+    };
+    input.addEventListener('input', () => {
+      if (source) {
+        source.value = input.value;
+        source.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      clearTimeout(timer);
+      timer = setTimeout(checkNow, 700);
+    });
+    setTimeout(() => input.focus(), 50);
+  }
+  if (step.open) host.send({ type: 'open', target: step.open, canvas_url: $('#canvas-url').value });
+  speak(step.say);
+}
+
+$('#g-next').addEventListener('click', () => {
+  const g = GUIDES[guide.name];
+  if (guide.i < g.steps.length - 1) {
+    guide.i += 1;
+    guideStep();
+  } else {
+    orb({ type: 'emotion', emotion: 'happy', intensity: 0.7, hold: 2 });
+    endGuide();
+  }
+});
+$('#g-back').addEventListener('click', () => {
+  if (guide.i > 0) {
+    guide.i -= 1;
+    guideStep();
+  } else {
+    endGuide();
+  }
+});
+$('#g-open').addEventListener('click', () => {
+  const step = GUIDES[guide.name].steps[guide.i];
+  if (step.open) host.send({ type: 'open', target: step.open, canvas_url: $('#canvas-url').value });
+});
+$('#g-stuck').addEventListener('click', () => {
+  $('#g-help').hidden = false;
+  $('#g-question').focus();
+});
+$('#g-ask').addEventListener('click', () => {
+  const g = GUIDES[guide.name];
+  const step = g.steps[guide.i];
+  const keys = {};
+  if ($('#anthropic').value.trim()) keys.ANTHROPIC_API_KEY = $('#anthropic').value.trim();
+  $('#g-answer').textContent = 'Thinking...';
+  orb({ type: 'state', state: 'thinking' });
+  host.send({ type: 'stuck', guide: g.title, step: step.say, question: $('#g-question').value.trim() || "I'm stuck", keys });
+});
+
 // ---------------------------------------------------------------- from the setup process
 const handlers = {
   model(msg) {
@@ -401,8 +526,43 @@ const handlers = {
       $('#wake').value = msg.wake || msg.name.toLowerCase();
     }
   },
+  checked(msg) {
+    const note = state.guideNote;
+    if (!note) return;
+    note.textContent = msg.message || (msg.ok ? 'Got it.' : "That didn't work.");
+    note.className = msg.ok ? 'note good' : 'note bad';
+    if (msg.ok) {
+      orb({ type: 'emotion', emotion: 'happy', intensity: 0.6, hold: 2 });
+      speak(msg.message.split('.')[0] + '.');
+    }
+  },
+  said(msg) {
+    if (!guide.pending || msg.id !== guide.pending.id || !msg.audio) return;
+    guide.said[`${state.voice}|${$('#effect').value}|${guide.pending.text}`] = msg.audio;
+    if (guide.name) play(state.voice, msg.audio);
+  },
+  answer(msg) {
+    orb({ type: 'state', state: 'speaking' });
+    if (msg.text) {
+      $('#g-answer').textContent = msg.text;
+      speak(msg.text);
+      return;
+    }
+    const tips = GUIDES[guide.name]?.steps[guide.i]?.tips || [];
+    $('#g-answer').innerHTML = '';
+    for (const tip of tips) {
+      const p = document.createElement('p');
+      p.textContent = tip;
+      $('#g-answer').appendChild(p);
+    }
+  },
   'key-checked'(msg) {
     state.keyOk = msg.ok === true;
+    if (state.guideFish) {
+      state.guideFish.textContent = msg.ok ? 'Got it, that key works.' : msg.message || "That key didn't work.";
+      state.guideFish.className = msg.ok ? 'note good' : 'note bad';
+      state.guideFish = null;
+    }
     $('#key-note').textContent = msg.ok ? 'Key works. Pick a voice and hear it.' : msg.message || "That key didn't work.";
     if (msg.ok) {
       orb({ type: 'emotion', emotion: 'happy', intensity: 0.6, hold: 2 });

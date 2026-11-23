@@ -21,7 +21,7 @@ _SUFFIXES = {b"\x89PNG\r\n\x1a\n": ".png", b"\xff\xd8\xff": ".jpg", b"GIF8": ".g
 @dataclass(frozen=True, eq=False)
 class Picture:
     data: bytes
-    name: str  # a file name for it, as the phone shows it: "Satellite - Boone.jpg"
+    name: str  # a file name for it, as the phone shows it: "Satellite - Portland.jpg"
     taken: float
 
 

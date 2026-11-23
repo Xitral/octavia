@@ -39,7 +39,8 @@
             <label class="choice"><input type="radio" name="brain" value="api_key" />
               <span><b>An Anthropic API key</b><small>Pay per use.</small></span></label>
             <label class="field" data-when="brain=api_key" hidden>Key
-              <input id="anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></label>
+              <input id="anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" />
+              <button type="button" class="guide-me link" data-guide="anthropic">Show me how to get one</button></label>
             <label class="choice"><input type="radio" name="brain" value="other" />
               <span><b>Another model</b><small>OpenAI, Gemini, Grok, Mistral, DeepSeek, Groq, OpenRouter, or one running
                 on this PC. Web search and self-improvement only work with Claude.</small></span></label>
@@ -71,7 +72,8 @@
             <label class="field">Fish Audio key <small>From fish.audio, under API Keys. There's a free tier.</small>
               <span class="row"><input id="fish" type="password" placeholder="paste it to hear the voices" autocomplete="off" />
                 <button id="check-key">Use it</button></span></label>
-            <p id="key-note" class="note dim">No key? It'll use the Windows voice until you add one.</p>
+            <p id="key-note" class="note dim">No key? It'll use the Windows voice until you add one.
+              <button type="button" class="guide-me link" data-guide="fish">Show me how to get one</button></p>
             <div id="voices" class="voices"></div>
             <label class="field">Effect
               <select id="effect">
@@ -98,7 +100,7 @@
           <article class="step" data-step="home" data-mood="idle" hidden>
             <p class="kicker">5 / 7 &middot; home</p>
             <h2>Where are you?</h2>
-            <label class="field">Town <span class="row"><input id="town" placeholder="e.g. Boone, North Carolina" />
+            <label class="field">Town <span class="row"><input id="town" placeholder="e.g. Portland, Oregon" />
               <button id="find">Find</button></span></label>
             <p id="found" class="note dim">Used for weather and directions. You can skip this.</p>
             <div id="others" class="others"></div>
@@ -111,29 +113,26 @@
             <h2>Connect anything?</h2>
             <p class="dim">All optional. Keys stay on this PC.</p>
             <details><summary>Discord <small class="inline">text and call it from your phone</small></summary>
-              <ol class="howto">
-                <li>At discord.com/developers/applications, make a New Application.</li>
-                <li>Under Bot, reset and copy the token, and turn on Message Content Intent.</li>
-                <li>Under OAuth2, URL Generator, tick "bot" plus Send Messages, Read Message History, Attach Files,
-                  Connect and Speak. Open the link and add the bot to your server.</li>
-                <li>In Discord's settings, turn on Developer Mode, then right-click your name and Copy User ID.</li>
-              </ol>
+              <button type="button" class="guide-me" data-guide="discord">Walk me through it</button>
               <label class="field">Bot token <input id="discord-token" type="password" autocomplete="off" /></label>
               <label class="field">Your user ID <input id="discord-owner" inputmode="numeric" /></label>
               <p class="dim">It only answers you.</p>
             </details>
             <details><summary>TickTick <small class="inline">to-dos</small></summary>
+              <button type="button" class="guide-me" data-guide="ticktick">Walk me through it</button>
               <label class="field">API token <small>TickTick on the web, Settings, Account &amp; Security</small>
                 <input id="ticktick" type="password" autocomplete="off" /></label></details>
             <details><summary>Canvas <small class="inline">coursework and grades</small></summary>
+              <button type="button" class="guide-me" data-guide="canvas">Walk me through it</button>
               <label class="field">Your school's Canvas address <input id="canvas-url" placeholder="https://yourschool.instructure.com" /></label>
               <label class="field">Access token <small>Canvas, Account, Settings, New Access Token</small>
                 <input id="canvas-token" type="password" autocomplete="off" /></label></details>
             <details><summary>Gmail <small class="inline">new-mail alerts</small></summary>
+              <button type="button" class="guide-me" data-guide="gmail">Walk me through it</button>
               <label class="field">Address <input id="gmail" /></label>
               <label class="field">App password <small>myaccount.google.com/apppasswords</small>
                 <input id="gmail-password" type="password" autocomplete="off" /></label></details>
-            <label class="toggle"><input id="share" type="checkbox" />
+            <label class="toggle"><input id="share" type="checkbox" checked />
               <span>Share what it learns with the ETHER
                 <small>ETHER (Entangled Thought Harmonics and Emergent Resonance) is where every OCTAVIA pools what it
                   learns. Fixes and mistakes it runs into get checked for anything personal, then a person reviews
@@ -158,6 +157,24 @@
             <ul id="notes" class="notes"></ul>
             <div class="actions"><button id="sign-in" class="go" hidden>Sign in to Claude</button>
               <button id="finish" class="go">Start OCTAVIA</button></div>
+          </article>
+
+          <!-- a guided connection, step by step -->
+          <article class="step" data-step="guide" data-mood="speaking" hidden>
+            <p class="kicker" id="g-kicker"></p>
+            <h2 id="g-title"></h2>
+            <div id="g-pic" class="g-pic"></div>
+            <p id="g-say" class="g-say"></p>
+            <p id="g-then" class="dim"></p>
+            <div id="g-field" class="g-field"></div>
+            <div id="g-help" class="g-help" hidden>
+              <span class="row"><input id="g-question" placeholder="What's happening? e.g. I don't see that button" />
+                <button type="button" id="g-ask">Ask</button></span>
+              <div id="g-answer" class="g-answer"></div>
+            </div>
+            <div class="actions"><button type="button" id="g-stuck">I'm stuck</button>
+              <button type="button" id="g-open" hidden>Open the page again</button>
+              <button type="button" id="g-back">Back</button><button type="button" class="go" id="g-next">Next</button></div>
           </article>
 
           <!-- waking: OCTAVIA itself starting -->

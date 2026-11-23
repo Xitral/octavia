@@ -25,7 +25,7 @@ class Home:
 
     @property
     def city(self) -> str:
-        """The first part of the name: "Boone" for "Boone, North Carolina"."""
+        """The first part of the name: "Portland" for "Portland, Oregon"."""
         return self.name.split(",")[0].strip()
 
     @property

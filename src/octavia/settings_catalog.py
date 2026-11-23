@@ -783,7 +783,7 @@ SETTINGS: tuple[Setting, ...] = (
     _s(
         "assistant.home",
         "Home",
-        "Your town, e.g. \u201cBoone, North Carolina\u201d: the weather, directions and maps use it when you name no "
+        "Your town, e.g. \u201cPortland, Oregon\u201d: the weather, directions and maps use it when you name no "
         "place. Empty: she asks.",
         words="city location town weather",
     ),

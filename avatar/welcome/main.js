@@ -14,7 +14,7 @@ const { emit, log, readMessages } = require('../lib/protocol');
 const { ORIGIN, registerScheme, handleScheme } = require('../lib/scheme');
 
 const SIZE = { width: 1080, height: 720 };
-const PAGE_MESSAGES = new Set(['preview', 'check-key', 'geocode', 'save', 'sign-in', 'done']);
+const PAGE_MESSAGES = new Set(['preview', 'check-key', 'geocode', 'save', 'sign-in', 'done', 'open', 'check', 'say', 'stuck']);
 
 function loadConfig(argv) {
   const at = argv.indexOf('--config');

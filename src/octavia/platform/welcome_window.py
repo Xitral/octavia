@@ -101,6 +101,16 @@ class Session:
         elif kind == "preview":
             args = (str(msg.get("key", "")), str(msg.get("voice_id", "")), str(msg.get("effect", "console")))
             threading.Thread(target=self._preview, args=args, daemon=True).start()
+        elif kind == "open":
+            from octavia.platform import welcome_guide
+
+            welcome_guide.open_page(str(msg.get("target", "")), str(msg.get("canvas_url", "")))
+        elif kind == "check":
+            threading.Thread(target=self._check, args=(msg,), daemon=True).start()
+        elif kind == "say":
+            threading.Thread(target=self._say, args=(msg,), daemon=True).start()
+        elif kind == "stuck":
+            threading.Thread(target=self._stuck, args=(msg,), daemon=True).start()
         elif kind == "geocode":
             threading.Thread(target=self._geocode, args=(str(msg.get("place", "")),), daemon=True).start()
         elif kind == "save":
@@ -160,6 +170,35 @@ class Session:
             cached = presets.preview(key, voice_id, text, fmt="pcm")
             self._raw[(voice_id, text)] = cached
         return cached
+
+    # ---- the guided connections (welcome_guide.py)
+    def _check(self, msg: dict[str, Any]) -> None:
+        from octavia.platform import welcome_guide
+
+        what = str(msg.get("what", ""))
+        ok, said = welcome_guide.check(what, str(msg.get("value", "")), str(msg.get("extra", "")))
+        self.send({"type": "checked", "what": what, "ok": ok, "message": said})
+
+    def _say(self, msg: dict[str, Any]) -> None:
+        """A guide's line in the chosen voice and effect (nothing without a Fish key: the page shows the words)."""
+        key, voice = str(msg.get("key", "")), str(msg.get("voice_id", ""))
+        text = str(msg.get("text", ""))[:300]
+        if not key or not text or presets.by_id(voice) is None:
+            return
+        try:
+            audio = presets.with_effect(self._spoken(key, voice, text), str(msg.get("effect", "console")))
+        except presets.PreviewError:
+            return
+        self.send({"type": "said", "id": msg.get("id"), "audio": base64.b64encode(audio).decode()})
+
+    def _stuck(self, msg: dict[str, Any]) -> None:
+        from octavia.platform import welcome_guide
+
+        keys = {k: str(v) for k, v in (msg.get("keys") or {}).items() if k in ALLOWED_ENV}
+        answer = welcome_guide.stuck(
+            self.root, str(msg.get("guide", "")), str(msg.get("step", "")), str(msg.get("question", "")), keys
+        )
+        self.send({"type": "answer", "text": answer})
 
     def _check_key(self, key: str, effect: str = "console") -> None:
         try:

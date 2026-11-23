@@ -127,3 +127,34 @@ small.inline { display: inline; margin-left: 8px; }
 
 .others { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: -4px; }
 .others button { padding: 4px 10px; font-size: 12px; }
+
+/* Guided connections */
+.guide-me { margin: 8px 0 2px; }
+.guide-me.link { background: none; border: 0; padding: 0 0 0 6px; color: var(--glow); font-size: 12px; text-decoration: underline;
+  box-shadow: none; display: inline; margin: 0; }
+.g-pic .pic { width: 100%; max-width: 420px; display: block; margin: 4px 0 14px; }
+.pic .pw { fill: rgba(8, 16, 32, 0.9); stroke: rgba(127, 196, 255, 0.28); }
+.pic .pd { fill: rgba(127, 196, 255, 0.25); }
+.pic .ps { fill: rgba(20, 34, 60, 0.7); }
+.pic .pl { fill: rgba(127, 196, 255, 0.22); }
+.pic .pt { fill: #9fb3d4; font: 10px Bahnschrift, "Segoe UI", sans-serif; }
+.pic .ptl { fill: #e3f0ff; font: 10px Bahnschrift, "Segoe UI", sans-serif; }
+.pic .pf { fill: rgba(4, 10, 22, 0.9); stroke: rgba(127, 196, 255, 0.25); }
+.pic .pb { fill: #2f6fd1; }
+.pic .pbt { fill: #fff; font: 11px Bahnschrift, "Segoe UI", sans-serif; }
+.pic .pon { fill: #2f6fd1; }
+.pic .pknob { fill: #fff; }
+.pic .ptick { stroke: #fff; stroke-width: 1.6; fill: none; }
+.pic .pring { fill: none; stroke: #7fc4ff; stroke-width: 1.5; opacity: 0.8; animation: ring 1.6s ease-in-out infinite; }
+@keyframes ring { 50% { opacity: 0.25; } }
+.g-say { font-size: 15px; color: var(--text); }
+.g-field input { display: block; width: 100%; padding: 8px 10px; color: var(--text); background: rgba(8, 16, 32, 0.85);
+  border: 1px solid var(--edge); border-radius: 8px; font: inherit; outline: none; }
+.g-field input:focus { border-color: var(--glow); }
+.note.good { color: #8fe3b0; }
+.note.bad { color: #ffb4a8; }
+.g-help { margin-top: 10px; }
+.g-help input { flex: 1; padding: 8px 10px; color: var(--text); background: rgba(8, 16, 32, 0.85); border: 1px solid var(--edge);
+  border-radius: 8px; font: inherit; outline: none; }
+.g-answer { margin-top: 10px; color: var(--text); }
+.g-answer p { margin: 0 0 6px; color: var(--dim); }

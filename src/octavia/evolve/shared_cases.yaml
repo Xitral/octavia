@@ -31,14 +31,14 @@ mocks:
   remove_avatar_prop: Done, put away.
   get_directions: 'New York, NY to Los Angeles, CA: about 41 hours driving (2,790 miles) via I-80 W and I-76 W. Nonstop flights
     take about 6 hours.'
-  get_weather: 'Today in Boone: 30% chance of rain after 3 PM, high 71°F, low 58°F.'
+  get_weather: 'Today in Portland: 30% chance of rain after 3 PM, high 71°F, low 58°F.'
   voice_volume: Your voice volume is 2.0 (it goes up to 4.0).
   get_volume: System volume 64%, not muted.
   set_volume: System volume set.
   hide_avatar: Hidden.
-  open_satellite_map: Opened a satellite map of Boone, NC.
-  show_satellite_image: Showing a satellite image of Boone, NC in a pop-up window.
-  look_at_satellite_image: 'Satellite image of Boone, NC: dense downtown, US-421 running north-south, lots of tree cover.'
+  open_satellite_map: Opened a satellite map of Portland, OR.
+  show_satellite_image: Showing a satellite image of Portland, OR in a pop-up window.
+  look_at_satellite_image: 'Satellite image of Portland, OR: dense downtown, I-5 running north-south, lots of tree cover.'
   ticktick_create_task: Created the task.
   ticktick_update_task: Updated the task.
 cases:

@@ -11,7 +11,7 @@ assistant:
   system_prompt_file: "personality/system.md"
   acknowledgments_file: "personality/acknowledgments.yaml"   # what it says while it thinks
   quick_replies_file: "personality/quick_replies.yaml"       # preset answers that skip the brain ("thanks")
-  home: ""                     # where you live, e.g. "Boone, North Carolina": weather, directions and maps use it
+  home: ""                     # where you live, e.g. "Portland, Oregon": weather, directions and maps use it
                                # when you name no place ("" = they ask)
   home_latitude: null          # optional: the home's coordinates (spares a lookup)
   home_longitude: null

@@ -152,7 +152,7 @@ def _region_fits(result: dict[str, Any], qualifier: str) -> bool:
 
 
 def _split_place(place: str) -> tuple[str, list[str]]:
-    """The town and what narrows it: "Boone, NC" and "Boone NC" both give ("Boone", ["NC"])."""
+    """The town and what narrows it: "Portland, OR" and "Portland OR" both give ("Portland", ["OR"])."""
     from octavia.tools.extensions.weather import _COUNTRY_ALIASES, _US_STATES
 
     parts = [p.strip() for p in place.split(",") if p.strip()]
@@ -396,7 +396,7 @@ def step_identity(p: Prompter, c: Choices) -> None:
 
 def step_home(p: Prompter, s: Services, c: Choices) -> None:
     p.say("\n5. Home")
-    place = p.ask("Your town, e.g. 'Boone, North Carolina' (Enter to skip: it'll ask when it matters)", "")
+    place = p.ask("Your town, e.g. 'Portland, Oregon' (Enter to skip: it'll ask when it matters)", "")
     if not place:
         return
     found = s.geocode(place)

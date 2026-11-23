@@ -103,6 +103,11 @@ def _parser() -> argparse.ArgumentParser:
     rb.add_argument("--out", default="dist", help="Folder for the build (default: dist)")
     rs = rel.add_parser("scan", help="Check a folder for anything personal or secret")
     rs.add_argument("folder")
+    rg = rel.add_parser("github", help="Build, scan (files, README, title, notes) and publish to the public repository")
+    rg.add_argument("--title", required=True)
+    rg.add_argument("--notes-file", required=True)
+    rg.add_argument("--passed", type=int)
+    rg.add_argument("--total", type=int)
     from octavia.hive.cli import add_parser as _hive_parser
 
     _hive_parser(sub)
@@ -528,6 +533,16 @@ def _cmd_release(args: argparse.Namespace) -> int:
         findings = scan.scan_folder(Path(args.folder), root, old_name=True)
         print(scan.report(findings))
         return 1 if findings else 0
+    if args.release_command == "github":
+        from octavia.release import github
+
+        try:
+            notes = Path(args.notes_file).read_text(encoding="utf-8")
+            print(github.publish(root, args.title, notes, args.passed, args.total))
+        except (github.PublishError, build.BuildError, OSError) as exc:
+            print(f"Not published: {exc}", file=sys.stderr)
+            return 1
+        return 0
     try:
         result = build.build(root, root / args.out)
     except build.BuildError as exc:
