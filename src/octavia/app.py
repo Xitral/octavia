@@ -299,6 +299,31 @@ def create_opener(config: AppConfig, prompt: SystemPromptBuilder, brain: BrainPr
     return Opener(chat)
 
 
+def create_cue_placer(config: AppConfig, brain: BrainProvider, tts: Any) -> Any:
+    """Her tone cues placed sentence by sentence (``tts.fish_audio.place_cues``, ``tts/cue_placer.py``): Haiku on a
+    warm session of its own, beside a Claude brain, for a voice that performs cues (Fish). None when it's off."""
+    if (
+        not config.tts.fish_audio.place_cues
+        or brain.name != "claude"
+        or tts is None
+        or not getattr(tts, "allowed_tags", None)
+    ):
+        return None
+    from octavia.brain.fast_chat import FastChat
+    from octavia.tts.cue_placer import SYSTEM_PROMPT, CuePlacer
+
+    cfg = config.brain.claude
+    chat = FastChat(
+        config.fast_chat,
+        cfg,
+        lambda: SYSTEM_PROMPT,
+        work_dir=config.resolve_path(cfg.work_dir) / "cue_placer",
+        config_dir=config.resolve_path(cfg.config_dir) if cfg.config_dir else None,
+        cli_path=config.claude_cli_path(),
+    )
+    return CuePlacer(chat)
+
+
 def create_stt(config: AppConfig) -> SpeechToText:
     from octavia.stt import create_stt as _create
 
@@ -513,7 +538,7 @@ class App:
             if refs[-1] is None:  # the default, maybe moved to Sonar Chat: should that not open, the default itself
                 refs.append(WINDOWS_DEFAULT)
             for tried, ref in enumerate(refs, start=1):
-                player = SoundDevicePlayer(rate, ref, cfg.audio.host_api)
+                player = SoundDevicePlayer(rate, ref, cfg.audio.host_api, spatial=self._panner(rate))
                 try:
                     await player.start()
                     self._closers.append(player.close)
@@ -528,6 +553,7 @@ class App:
                     else:
                         self._device_missing("speaker", ref, exc)
             speech = SpeechOutput(tts, player, self.events, cfg.tts.min_chunk_chars, voice_volume.gain)
+            speech.rhythm = cfg.tts.rhythm
             if (note := piece_size_note(cfg.tts.min_chunk_chars)) is not None:
                 log.warning(note)
                 self.notice(note, source="TTS", level=logging.WARNING)
@@ -600,6 +626,10 @@ class App:
         if opener is not None:
             await opener.start()  # connects in the background too; no opening words until it's up
             self._closers.append(opener.close)
+        if speech is not None and (placer := create_cue_placer(cfg, brain, tts)) is not None:
+            await placer.start()  # connects in the background; sentences are said as written until it's up
+            self._closers.append(placer.close)
+            speech.cue_placer = placer
         if self._local_shadow is not None and cfg.local_brain.mode != "shadow":
             from octavia.localbrain.router import RoutedBrain
 
@@ -786,6 +816,14 @@ class App:
             return "" if not course or game_in_front() else course
 
         assistant.studying = studying_at_the_screen
+
+        def in_focus_time() -> str:
+            # Focus time ("let me focus for 45 minutes") or a snooze from the tray: her own news waits too.
+            from octavia.tools.extensions import focus as focus_time
+
+            return "in focus time" if focus_time.KEEPER.session is not None else ""
+
+        assistant.focus_probes.append(in_focus_time)
         context.extras["heard_talking"] = assistant.heard_talking  # the user started talking while she worked
         context.extras["speak"] = assistant.say_during_turn
         context.extras["play_in_reply"] = assistant.play_during_turn  # a sound between two sentences of the reply
@@ -2372,6 +2410,14 @@ class App:
         if futures is not None and self.voice and connect_proactive(futures, inner):
             log.info("Her thoughts go to the proactive gate too")
 
+    def _panner(self, rate: int) -> Any:
+        """Directional audio for her speaker (``audio/spatial.py``), or None with ``audio.directional`` off."""
+        if not self.config.audio.directional:
+            return None
+        from octavia.audio.spatial import Panner
+
+        return Panner(rate, self.config.audio.directional_width)
+
     async def _start_avatar(self, assistant: Assistant, player: Any) -> None:
         """The character on the desktop (voice mode only: `octavia chat` beside it would start a second one)."""
         from octavia.avatar.bridge import AvatarBridge
@@ -2381,6 +2427,8 @@ class App:
             return
         self._closers.insert(0, bridge.close)
         bridge.on_click = assistant.request_talk
+        if getattr(player, "spatial", None) is not None:
+            bridge.on_where = player.spatial.place  # her voice comes from where she is (audio/spatial.py)
         assistant.camera = bridge.shows_snapshot  # the shutter sound lands on her camera's flash
         if player is not None:
             _add_render_tap(player, bridge.on_render)
@@ -3226,6 +3274,12 @@ class App:
             def available(self) -> Any:
                 return watch.available
 
+            async def check(self) -> tuple[Any, str | None]:
+                """The feed, looked at now: (a newer release or None, why it couldn't look or None)."""
+                await asyncio.to_thread(watch.check)
+                watch.told = watch.available.version if watch.available is not None else watch.told
+                return watch.available, watch.error
+
             async def start(self) -> str | None:
                 pids = [os.getpid()] + ([os.getppid()] if is_supervised() else [])
                 try:
@@ -3426,6 +3480,9 @@ class App:
             return True
 
         hooks["audio.earcon_volume"] = hooks["audio.sound_pack"] = earcons
+        from octavia.audio import spatial
+
+        hooks.update(spatial.live_hooks(player))  # audio.directional and its width
 
         def ears(**change: Any) -> None:
             for ear in (assistant.endpointer, assistant._stop_ear):

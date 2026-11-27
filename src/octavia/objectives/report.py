@@ -13,6 +13,7 @@ from typing import Any
 
 from octavia.core import usage as claude_usage
 from octavia.objectives.models import (
+    BLOCKED,
     CHECKING,
     DONE,
     FAILED,
@@ -20,6 +21,7 @@ from octavia.objectives.models import (
     OBJECTIVE_FAILED,
     PENDING,
     PLANNING,
+    REPLACED,
     RUNNING,
     SKIPPED,
     VERIFIED,
@@ -28,11 +30,13 @@ from octavia.objectives.models import (
 )
 
 RECENT = timedelta(days=3)  # ended objectives and tasks still worth mentioning
+BLOCKED_SHOWN = timedelta(days=14)  # an objective stopped on something only the user can give
 _STATUS = {
     PLANNING: "planning it",
     "working": "working on it",
     DONE: "done",
     "unfinished": "ended unfinished",
+    BLOCKED: "stopped, waiting on you",
     OBJECTIVE_FAILED: "couldn't start",
     OBJECTIVE_CANCELLED: "cancelled",
 }
@@ -50,7 +54,9 @@ def recent(objectives: Iterable[Objective], now: datetime) -> list[Objective]:
     out = []
     for o in objectives:
         ended = _when(o.finished)
-        if o.open or (
+        if o.status == BLOCKED and ended is not None and now - ended <= BLOCKED_SHOWN:
+            out.append(o)  # what it waits on is the user's to answer: shown longer than work that just ended
+        elif o.open or (
             ended is not None and now - ended <= (RECENT if o.status != OBJECTIVE_CANCELLED else timedelta(hours=12))
         ):
             out.append(o)
@@ -69,6 +75,8 @@ def needs_you(objective: Objective) -> str | None:
         return (
             f"verified code for “{objective.title}” is on a branch of {objective.project}, waiting for your OK to merge"
         )
+    if objective.status == BLOCKED and objective.blocked_on:
+        return f"“{objective.title}” can't go on without you: {objective.blocked_on}"
     return None
 
 
@@ -79,10 +87,13 @@ def line(objective: Objective, now: datetime) -> str:
         return f"{head}: planning it." + (f" Held back: {objective.waiting}." if objective.waiting else "")
     if objective.status == OBJECTIVE_FAILED:
         return f"{head}: couldn't start. {objective.error or ''}".strip()
-    total = len(objective.steps)
-    verified = sum(1 for s in objective.steps if s.status == VERIFIED)
-    unresolved = [s for s in objective.steps if s.status in (FAILED, SKIPPED)]
+    live = objective.live_steps
+    total = len(live)
+    verified = sum(1 for s in live if s.status == VERIFIED)
+    unresolved = [s for s in live if s.status in (FAILED, SKIPPED)]
     parts = [f"{verified} of {total} steps verified"]
+    if replaced := len(objective.steps) - total:
+        parts.append(f"planned again after a failure ({replaced} earlier step{'s' if replaced > 1 else ''} replaced)")
     active = [s for s in objective.steps if s.status in (RUNNING, CHECKING)]
     if active:
         parts.append("now " + "; ".join(f"step {s.id} “{s.title}” ({_doing(s)})" for s in active))
@@ -136,7 +147,7 @@ def _step(s: Step) -> str:
     if s.evidence:
         parts.append(f"Checked: {s.evidence}")
     if s.problem and s.status != VERIFIED:
-        parts.append(f"Problem: {s.problem}")
+        parts.append(f"{'Why' if s.status == REPLACED else 'Problem'}: {s.problem}")
     if s.file:
         parts.append(f"Result saved in {s.file}")
     return " ".join(part.strip().rstrip(".") + "." for part in parts)
@@ -214,7 +225,8 @@ def summary_for_prompt(objectives: list[Objective], now: datetime) -> str:
         return ""
     under_way = [o for o in shown if o.open]
     ended = [o for o in shown if not o.open and o.status != OBJECTIVE_CANCELLED]
-    asks = [o for o in shown if needs_you(o) is not None]
+    blocked = [o for o in shown if o.status == BLOCKED]
+    asks = [o for o in shown if o.status != BLOCKED and needs_you(o) is not None]
     parts = []
     if under_way:
         parts.append(f"{len(under_way)} under way (" + "; ".join(f"#{o.id} {o.title}" for o in under_way) + ")")
@@ -222,4 +234,6 @@ def summary_for_prompt(objectives: list[Objective], now: datetime) -> str:
         parts.append(f"{len(ended)} ended lately")
     if asks:
         parts.append(f"{len(asks)} waiting for the user's OK to merge")
+    if blocked:
+        parts.append(f"{len(blocked)} stopped on something only the user can give (objective_status says what)")
     return "Objectives: " + ", ".join(parts) + "."

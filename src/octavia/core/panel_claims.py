@@ -29,7 +29,7 @@ from collections.abc import Callable
 
 from octavia.core.claim_hold import ACTION, ClaimHold, Held, Kind, Turn
 from octavia.core.claim_hold import without_dropped as without_dropped
-from octavia.core.claims import Act, Claim
+from octavia.core.claims import _QUOTED, Act, Claim
 
 # The calls that put something on one of her panels.
 PANEL_CALL = re.compile(
@@ -40,10 +40,21 @@ _PANEL = re.compile(
     r"\b(?:panels?|on (?:the|your|my) screen|on screen|up (?:there|for you)|pulled (?:it |that )?up|popped (?:it |that )?up)\b",
     re.IGNORECASE,
 )
-# ...saying it's there now, or that she just put it there.
+# ...saying she just put it there, or changed what's on it.
 _NEW = re.compile(
     r"\b(?:now|I've|I have|I just|I put|I made|I turned|I added|I changed|I updated|I drew|I built|I set|I threw|"
-    r"I pulled|I popped|I swapped|I opened|it's up|is up|are up|went up|here's|here it is|there it is)\b",
+    r"I pulled|I popped|I swapped|I opened|went up)\b",
+    re.IGNORECASE,
+)
+# ...or that it's there ("it's up", "here's"): with a panel up already, that's true unless she's about to change it,
+# so it only counts when a panel call comes after it in the turn (``_up_at_end``).
+_THERE = re.compile(r"\b(?:it's up|is up|are up|here's|here it is|there it is)\b", re.IGNORECASE)
+# Words about her panels that aren't her saying one is up: what she told or asked someone ("I told it I keep saying
+# the panel isn't up", 2026-11-23, while she typed the bug up for Claude), quoted words.
+# Only at the start of a sentence or clause: "I put it on the panel, like I said I would" is still her claim.
+_REPORTING = re.compile(
+    r"(?:^|[;:]\s*|\band\s+)[\s\"'“]*(?:then\s+|so\s+)?I(?:'ve| have)?\s+(?:also\s+|just\s+)?"
+    r"(?:told|said|asked|wrote|typed|explained|described|mentioned|reported|let (?:it|them|him|her) know)\b",
     re.IGNORECASE,
 )
 # ...not an offer or a plan.
@@ -66,13 +77,26 @@ def says_state(sentence: str, panels_up: bool) -> bool:
 def says_panel_up(sentence: str, panels_up: bool) -> bool:
     """Whether ``sentence`` says a panel is up (or newly shows something). With ``panels_up`` (one of hers is on
     screen already), only a sentence saying it changed counts."""
-    if not _PANEL.search(sentence) or _NOT_YET.search(sentence):
+    bare = _QUOTED.sub("", sentence)
+    if not _PANEL.search(bare) or _NOT_YET.search(bare) or _REPORTING.search(bare):
         return False
-    return not panels_up or bool(_NEW.search(sentence))
+    return not panels_up or bool(_NEW.search(bare) or _THERE.search(bare))
 
 
 def _says_up(sentence: str, turn: Turn) -> Claim | None:
-    return Claim("panel", sentence.strip()) if says_panel_up(sentence, turn.panels_up) else None
+    if not says_panel_up(sentence, turn.panels_up):
+        return None
+    there = turn.panels_up and not _NEW.search(_QUOTED.sub("", sentence))
+    return Claim("there" if there else "panel", sentence.strip())
+
+
+def _up_at_end(held: Held, turn: Turn) -> tuple[bool, str]:
+    """With a panel up, "the question is up on the panel" and no panel call after it is about the one that's up: said
+    as written. Anything else no panel call bore out isn't so: dropped, and she says the panel didn't come up."""
+    tried = any(PANEL_CALL.search(a.name) for a in turn.acts[held.acts_before :])
+    if held.claim is not None and held.claim.verb == "there" and not tried:
+        return True, ""
+    return False, NOT_UP
 
 
 def _says_state(sentence: str, turn: Turn) -> Claim | None:
@@ -85,7 +109,19 @@ def _panel_bears_out(held: Held, act: Act) -> bool:
 
 # Kinds of ``claim_hold.ClaimHold``: "it's on the panel" is borne out by a panel call alone, and with none it isn't up
 # (dropped, said so); how things stand now, while studying with a panel up, waits the same way but is never dropped.
-PANEL_UP = Kind("panel_up", _says_up, _panel_bears_out, lambda held, turn: (False, NOT_UP))
+PANEL_UP = Kind(
+    "panel_up",
+    _says_up,
+    _panel_bears_out,
+    _up_at_end,
+    said_once=True,
+    note=(
+        'in your last reply you said "{said}", but none of your panels is on screen (no panel call of yours came back '
+        "done in that turn, and a restart closes them all), so the user heard {heard} instead. Don't say a panel is up "
+        "or still up unless a panel call of yours came back done in the same reply; if they need it, put it up again "
+        "with show_visual, and don't bring up that it was missing"
+    ),
+)
 PANEL_STATE = Kind("panel_state", _says_state, _panel_bears_out, lambda held, turn: (True, NOT_SHOWN), ("panel_up",))
 
 

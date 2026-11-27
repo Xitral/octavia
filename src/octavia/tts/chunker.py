@@ -149,9 +149,42 @@ def without_hedges(sentence: str) -> str:
 def without_self_tag(sentence: str) -> str:
     """``sentence`` without a tag that ties the take back to her ("" when the whole sentence is one), a label answer
     without its ", no contest", and no hedge on a take (``without_hedges``)."""
-    if _SELF_TAG_SENTENCE.match(sentence):
+    if _SELF_TAG_SENTENCE.match(sentence) or _ON_ME_SENTENCE.match(sentence) or _TAKE_IT_SENTENCE.match(sentence):
         return ""
-    return without_hedges(_LABEL_COMMA.sub(r"\1\2\3", _SELF_TAG_CLAUSE.sub("", sentence)))
+    sentence = _TAKE_IT_LEAD.sub(lambda m: m.group(1) + m.group(2).upper(), sentence)
+    sentence = _ON_ME_LEAD.sub(lambda m: m.group(1) + m.group(2).upper(), sentence)
+    while (shorter := _ON_ME_CLAUSE.sub("", sentence)) != sentence:  # "..., my bad, that one's on me."
+        sentence = shorter
+    sentence = _LABEL_COMMA.sub(r"\1\2\3", _SELF_TAG_CLAUSE.sub("", sentence))
+    untailed = _VERDICT_TAIL.sub("", sentence)
+    if untailed != sentence and not _JUST_INTERJECTION.fullmatch(untailed):  # "Okay, easy." is "calm down"
+        sentence = untailed
+    return without_hedges(sentence)
+
+
+# A verdict tacked onto a string of pieces ("Ice cold, straight from the fridge, no contest."): the user heard it as
+# "extremely AI" (2026-11-25). The pieces are said; the tail isn't. Only at the very end, after a comma.
+# Taking a compliment with the same stock line ("I'll take it.", "Oh, I'll take that one."): the user heard it as
+# stiff (2026-11-25). Only the bare acceptance: "I'll take it from here" and "I'll take that bet" stay.
+_TAKE_IT = r"i'll (?:happily |gladly )?take (?:it|that(?: one)?|the (?:win|compliment|w))"
+_TAKE_IT_SENTENCE = re.compile(
+    rf"^\s*(?:\[[^\]]+\]\s*)*(?:(?:oh|ha|heh|well|yeah|hey),?\s+)?{_TAKE_IT}[.!]?\s*$", re.IGNORECASE
+)
+_TAKE_IT_LEAD = re.compile(
+    rf"^(\s*(?:\[[^\]]+\]\s*)*)(?:(?:oh|ha|heh|well|yeah|hey),?\s+)?{_TAKE_IT}[,;:.!]\s+(\w)", re.IGNORECASE
+)
+_JUST_INTERJECTION = re.compile(
+    r"\s*(?:\[[^\]]*\]\s*)*(?:okay|ok|alright|whoa|hey|wait|yeah|hold on|slow down)\W*", re.I
+)
+_VERDICT_TAIL = re.compile(r",\s*(?:no contest|hands down|no question|no doubt|easy|easily|all day)(?=[.!]?\s*$)", re.I)
+
+
+# Owning a slip with the same stock line every time ("That's on me.", "My bad, ..."): the user heard it as AI
+# (2026-11-25). The fix she says next is the apology; the line itself isn't said.
+_ON_ME = r"(?:that(?:'s| one's| was| is) (?:on me|my (?:bad|fault|mistake))|my bad|my fault|my mistake)"
+_ON_ME_SENTENCE = re.compile(rf"^\s*(?:\[[^\]]+\]\s*)*(?:yeah,?\s+|okay,?\s+|sorry,?\s+)?{_ON_ME}[.!]?\s*$", re.I)
+_ON_ME_LEAD = re.compile(rf"^(\s*(?:\[[^\]]+\]\s*)*)(?:yeah,?\s+|okay,?\s+)?{_ON_ME}[,;:]\s+(\w)", re.I)
+_ON_ME_CLAUSE = re.compile(rf"[,;]\s*(?:and |so )?{_ON_ME}(?=\s*[.!?…]|\s*$)", re.I)
 
 
 _EMOJI = re.compile(

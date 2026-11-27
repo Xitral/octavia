@@ -43,3 +43,4 @@ hive:
   # Signed releases from GitHub (docs/hive.md): checked against the maintainer's key below before anything applies.
   feed: "https://github.com/Xitral/octavia/releases/latest/download"
   public_key: "ff230d22d909341fbc25c5e77ca17400dc75ef7c79a96638e0c70ca6e9781419"
+  check_every_h: 4             # a release that comes out while it's running shows up the same evening

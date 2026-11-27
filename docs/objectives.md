@@ -108,3 +108,11 @@ or checked.
 
 `src/octavia/objectives/` (`runner.py` is the heart), tools in `src/octavia/tools/extensions/objectives.py`, wiring in
 `App._start_objectives`. Tests: `tests/test_objectives.py`, `tests/test_objectives_app.py`.
+
+## When a step fails
+
+It doesn't give up the steps after it. The rest is planned again with what happened known (twice at most), and the
+steps that were replaced stay in the account with why. If it can't go on without you (a sign-in, a file, a
+decision), it stops and it says the one thing it needs; tell it when it's sorted ("I've signed in now", "the
+file's in Downloads") and it picks it up from what was done. "Try that again" does the same for one that ended
+unfinished. A new objective is told what earlier ones on the same project ran into.

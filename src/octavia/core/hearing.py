@@ -671,6 +671,12 @@ class HearingMixin:
                 _resolve(self._capture_waiter, EndpointEvent(EndpointKind.NO_SPEECH))
             return
         self._barge_kind = kind
+        # Talking over her voice (not her name said while she works quietly: that's addressing her, and the exact
+        # stops cover it): what it says may be a stop however it's heard (``core/cut_off.py``).
+        if kind == "voice" and getattr(self, "_speaking_since", None) is not None:
+            began = getattr(self, "_began_talking_at", None)
+            into_s = time.monotonic() - began if began is not None else None
+            self._cut_in = (time.monotonic(), into_s, bool(getattr(self, "_saying_unasked", False)))
         if kind != "stop":
             # Start capturing *now*, synchronously, so no words are lost while the
             # brain and speech are being torn down. For voice barge-in the frames that
@@ -694,9 +700,21 @@ class HearingMixin:
             "hotkey": "talk hotkey",
             "stop": "stop hotkey",
         }
-        # How long they'd been talking over her when her voice stopped: the frames that tripped a voice barge-in.
-        after_s = round(self._barge_run_ms / 1000, 3) if kind == "voice" else None
+        # How long they'd been talking over her when her voice went quiet: the speech that tripped a voice barge-in,
+        # and what the speaker's own buffer still played out after she was told to stop (cleared audio never plays,
+        # but what the device already holds does). Until 2026-11-25 only the first part was logged, so every
+        # interruption read 0.16 s, the threshold, whatever the speaker.
+        after_s = round(self._barge_run_ms / 1000 + self._speaker_lag_s(), 3) if kind == "voice" else None
         self.events.emit(Interrupted(reason=reason or reasons.get(kind, kind), after_s=after_s))
+
+    def _speaker_lag_s(self) -> float:
+        """What her speaker still plays after its queue is cleared: the output stream's own latency (0 when it
+        doesn't say)."""
+        sink = getattr(self.speech, "sink", None) if self.speech is not None else None
+        try:
+            return max(0.0, float(getattr(sink, "latency", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
 
     def _silence(self) -> None:
         """Stop her voice on the very frame the user cut in, not once the turn gets round to tearing itself down.

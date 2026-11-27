@@ -112,6 +112,8 @@ SECTIONS: tuple[Section, ...] = (
                 "tts.fish_audio.model",
                 "tts.fish_audio.speed",
                 "tts.fish_audio.expressive_tags",
+                "tts.fish_audio.place_cues",
+                "tts.rhythm",
             ),  # fmt: skip
             _g(
                 "Keeping up when Fish is slow",
@@ -204,6 +206,7 @@ SECTIONS: tuple[Section, ...] = (
         (
             _g("Devices", "audio.input_device", "audio.output_device", "audio.headphones"),
             _g("Loudness", "audio.output_volume", "audio.earcon_volume"),
+            _g("Direction", "audio.directional", "audio.directional_width"),
             _g("Her little sounds", "audio.earcons", "audio.sound_pack", "audio.working_sound", "audio.done_sound"),
         ),
     ),
@@ -905,6 +908,19 @@ SETTINGS: tuple[Setting, ...] = (
         "I use headphones",
         "Lets you interrupt her just by talking, since her voice can't leak into the mic.",
     ),  # fmt: skip
+    _s(
+        "audio.directional",
+        "Voice from where she is",
+        "Her voice and sounds come from her side of the screen, and move with her. Best with headphones.",
+        words="directional spatial stereo pan left right 3d",
+    ),  # fmt: skip
+    _s(
+        "audio.directional_width",
+        "How far to the side",
+        "How much quieter the far ear is when she's at the screen's edge.",
+        kind="percent",
+        words="directional spatial stereo pan width",
+    ),  # fmt: skip
     _s("audio.earcons", "Sound cues", "The little sounds for what she's doing.", words="earcons chimes"),
     _s("audio.earcon_volume", "Sound cue volume", "How loud those little sounds are.", kind="percent"),
     _s(
@@ -1071,6 +1087,20 @@ SETTINGS: tuple[Setting, ...] = (
         words="top p",
     ),
     _s("tts.fish_audio.expressive_tags", "Tone cues", "Let her use cues like [excited] in her voice."),
+    _s(
+        "tts.rhythm",
+        "Natural rhythm",
+        "Pauses that change with how a sentence ends (longer after a question or a full stop, barely one at a "
+        "comma) and a pace for each sentence (a short line a little quicker, a stressed one a little slower). "
+        "Never before her first words, and never longer when the next sentence is already late.",
+    ),
+    _s(
+        "tts.fish_audio.place_cues",
+        "Cues placed for her",
+        "A quick Haiku session adds tone cues, laughs, breaths, stressed words and beats to each sentence after her "
+        "first, the words unchanged, while the sentence before plays. It never makes her wait: a placement that's late "
+        "is skipped. About three small Haiku calls a spoken reply.",
+    ),
     _s(
         "tts.fallback",
         "Backup voice",

@@ -89,6 +89,7 @@ BRAIN, VOICE = "brain", "voice"  # who answers / which voice speaks: "brain:<bra
 EFFECT = "effect"  # her voice effect: "effect:<tts.voice_effect>"
 SNOOZE_S = 3600.0
 RELEASE = "release-update"  # a public install's update from the signed feed (``hive/updater.py``)
+CHECK_RELEASE = "release-check"  # look at the feed now (the watch only looks now and then)
 
 # What each of her states looks like, and says when hovered.
 _STATE_KIND = {
@@ -364,6 +365,8 @@ class TrayMenu:
         if available is not None:
             version = str(available.version).split("+")[0]
             items += [MenuItem(RELEASE, f"Update {self.name} to {version}", enabled=free and ready), MenuItem(None)]
+        elif self._release is not None and hasattr(self._release, "check"):
+            items += [MenuItem(CHECK_RELEASE, "Check for updates", enabled=going), MenuItem(None)]
         if self._chat is not None:
             chat = "Chat" + (f"\t{_keys(self._chat_hotkey)}" if self._chat_hotkey else "")
             items += [MenuItem(CHAT, chat, enabled=going and ready), MenuItem(None)]
@@ -551,6 +554,8 @@ class TrayMenu:
                 await self.shut_down()
             elif key == RELEASE:
                 await self.update_release()
+            elif key == CHECK_RELEASE:
+                await self.check_release()
         except Exception:
             log.exception("The tray's %r failed", key)
 
@@ -571,6 +576,22 @@ class TrayMenu:
         if not await self._shut_down():  # she couldn't: back as she was
             self._leave(None)
             await _off_loop(self._show, self.name, "I couldn't shut down just now. Try again in a moment.")
+
+    async def check_release(self) -> None:
+        """Looks at the feed now. A newer release: asked once whether to update now (the menu offers it either
+        way). None: says this is the latest, or why it couldn't look."""
+        if self._release is None or not hasattr(self._release, "check"):
+            return
+        available, error = await self._release.check()
+        self._changed()
+        if available is not None:
+            version = str(available.version).split("+")[0]
+            if await _off_loop(self._ask, self.name, f"Version {version} is out. Update now? It takes about a "
+                               "minute, and everything you've told me stays."):  # fmt: skip
+                await self.update_release()
+            return
+        text = f"I couldn't reach the update feed just now ({error})." if error else "I'm on the latest version."
+        await _off_loop(self._show, self.name, text)
 
     async def update_release(self) -> None:
         """The click starts the update: the updater takes over and she shuts down, then starts on the new version."""

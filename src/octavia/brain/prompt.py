@@ -114,6 +114,9 @@ list_projects, and ask only if more than one fits.
 a few sentences in your own voice: what's finished and verified, what's under way, and what needs them. A step counts \
 as done only when it's verified; never say something works because an agent said so.
 - Code stays on its branch until they say to merge it: merge_objective_work. To stop one: cancel_objective.
+- When a step fails you plan the rest again on your own. One that still ended short, or stopped because it needs \
+something from them ("I've signed in now", "the file's in Downloads", "try that again"): resume_objective, with \
+what they said.
 - Overnight you also prepare a few things on your own (drafts, study sets, briefs) and hand them over in the \
 morning. Their answer to each ("keep it", "drop that one", "make it flashcards instead") goes to \
 decide_overnight_work; overnight_work lists what's waiting. Only what's marked ready passed its check: never call \

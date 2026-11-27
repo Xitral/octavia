@@ -49,6 +49,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -645,9 +646,48 @@ def renamed(before: list[str]) -> tuple[str, list[str]]:
     return session, lines
 
 
-async def replay(moment: Moment, setup: Any, prompt: str, extra_note: str = "") -> Result:
+# Where a note of hers in a turn's header ends: at the next note, which starts one of these ways (after "; "), or at a
+# line of its own (her panels' listing). A note's own text has "; " in it, so the pieces alone don't say.
+NOTE_STARTS = (
+    "for this answer: ", "from their voice", "related to what they just", "you were interrupted", "you announced this",
+    "screen task #", "background task #", "the user is on a", "you were about to shut", "they sent a file",
+    "texted from their phone", "typed in your chat window", "this is your scheduled job", "in your last reply",
+    "promises you made", "the user asked you to work quietly", "since your last answer",
+)  # fmt: skip
+
+
+def _note_at(head: str, start: str) -> re.Match[str] | None:
+    """Where a note beginning with ``start`` begins in a header: as a note of its own (after "; " or the opening
+    bracket), or as a line of a note that holds several (what she recalls comes as lines)."""
+    return re.search(r"(?:(?<=^\[)|; |\n)" + re.escape(start), head)
+
+
+def carries_note(sent: str, start: str) -> bool:
+    """Whether the message's header (its notes) has a note beginning with ``start``."""
+    head, sep, _ = sent.partition("]\n")
+    return bool(sep) and _note_at(head, start) is not None
+
+
+def without_note(sent: str, start: str) -> str:
+    """``sent`` (a turn's message as she got it) without the note in its header that begins with ``start``: to the
+    end of its line, or with none to the next note (``NOTE_STARTS``) or the header's end. For asking a moment again
+    as if she hadn't been given that note. Unchanged when there's none."""
+    head, sep, rest = sent.partition("]\n")
+    found = _note_at(head, start) if sep else None
+    if found is None:
+        return sent
+    begin = found.end() - len(start)
+    ends = [i for mark in NOTE_STARTS if (i := head.find(f"; {mark}", found.end())) >= 0]
+    if (line := head.find("\n", found.end())) >= 0:
+        ends.append(line)
+    end = min(ends) if ends else len(head)
+    return f"{head[: found.start()]}{head[end:]}]\n{rest}" if begin > 1 else f"[{head[end:].lstrip('; ')}]\n{rest}"
+
+
+async def replay(moment: Moment, setup: Any, prompt: str, extra_note: str = "", drop_note: str = "") -> Result:
     """Ask ``moment`` again of the code imported now (``setup`` from ``evals._setup``). ``extra_note``: a line added
-    to the message's notes (an experiment's: a strategy, a lesson). The result isn't graded yet."""
+    to the message's notes (an experiment's: a strategy, a lesson). ``drop_note``: the start of a note she was given
+    then, left out now (``without_note``). The result isn't graded yet."""
     from octavia.brain.base import ResponseDone, TextDelta, ToolUseStarted, UserTurn
     from octavia.brain.claude import ClaudeBrain
     from octavia.core.events import EventBus
@@ -667,7 +707,7 @@ async def replay(moment: Moment, setup: Any, prompt: str, extra_note: str = "") 
     claude = config.brain.claude
     home = config.resolve_path(claude.config_dir) if claude.config_dir else None
     executor = RecordedExecutor(moment.calls)
-    sent = moment.prompt
+    sent = without_note(moment.prompt, drop_note) if drop_note else moment.prompt
     if extra_note:
         head, sep, rest = sent.partition("]\n")
         sent = f"{head}; {extra_note}]\n{rest}" if sep else f"[{extra_note}]\n{sent}"
@@ -831,9 +871,13 @@ async def run(
     workers: int = WORKERS,
     may_go_on: Callable[[], str | None] = lambda: None,
     on_result: Callable[[Result], None] | None = None,
+    carrying: str = "",
+    drop_note: str = "",
 ) -> tuple[list[Result], str | None]:
     """Replay and grade ``cases``, ``workers`` at a time. Stops starting new ones when ``may_go_on`` says why not
-    (the usage budget); returns the results and that reason."""
+    (the usage budget); returns the results and that reason. ``carrying``: only the moments whose message had a note
+    beginning so; ``drop_note``: asked without the note beginning so (the two together measure what a kind of note
+    of hers does, on the very moments it was given)."""
     gate = asyncio.Semaphore(workers)
     stopped: list[str] = []
     touched: list[LiveTranscriptTouched] = []
@@ -852,8 +896,10 @@ async def run(
             except (OSError, ValueError, IndexError) as exc:
                 log.warning("Couldn't read the moment of %s: %s", case.key, exc)
                 return
+            if carrying and not carries_note(moment.prompt, carrying):
+                return
             try:
-                result = await replay(moment, setup, prompt)
+                result = await replay(moment, setup, prompt, **({"drop_note": drop_note} if drop_note else {}))
             except LiveTranscriptTouched as exc:
                 touched.append(exc)
                 stopped.append(str(exc))
@@ -950,6 +996,71 @@ async def refresh_cases(
     return cases
 
 
+async def note_cases(
+    root: Path, config: Any, start: str, *, screen_new: bool, share: bool = False
+) -> tuple[list[Case], Counter[str]]:
+    """Every judged turn of hers (her lessons: fine, or the user's next words went against it) whose message carried
+    a note beginning with ``start``, and how the header goes on after each such note (to check ``without_note`` cuts
+    where the note ends). Screening is taken from ``cases.json`` where it's known; with ``screen_new`` the rest of the
+    failed ones are screened within the usage budget."""
+    known = {c.key: c for c in load_cases(_folder(root) / CASES_FILE)}
+    folder = transcripts_dir(root, config)
+    index = index_transcripts(folder, _folder(root) / INDEX_FILE)
+    cases: list[Case] = []
+    after: Counter[str] = Counter()
+    for fresh in lessons_of(config.resolve_path("data/futures/futures.db")):
+        case = known.get(fresh.key, fresh)
+        if not case.file and (turn := find_turn(index, case.words, case.ts)) is not None:
+            case.file, case.line, case.picture = turn["file"], turn["line"], bool(turn["picture"])
+        if not case.file or case.line < 0:
+            continue
+        try:
+            sent = read_moment(folder / case.file, case.line).prompt
+        except (OSError, ValueError, IndexError):
+            continue
+        if not carries_note(sent, start):
+            continue
+        cases.append(case)
+        head = sent.partition("]\n")[0]
+        cut_at = _note_at(head, start).start()  # type: ignore[union-attr]
+        left = without_note(sent, start).partition("]\n")[0]
+        after[left[cut_at : cut_at + 24].strip("; \n") or "(the header's end)"] += 1
+    to_screen = [c for c in cases if c.failed and not c.picture and c.objected is None]
+    if screen_new and to_screen:
+        allowed = _budget(config, share=share)
+        gate = asyncio.Semaphore(WORKERS)
+
+        async def one(case: Case) -> None:
+            async with gate:
+                if allowed():
+                    return
+                with contextlib.suppress(OSError, ValueError, IndexError):
+                    await screen(case, read_moment(folder / case.file, case.line), config)
+
+        await asyncio.gather(*(one(c) for c in to_screen))
+    return cases, after
+
+
+async def _cmd_notes(args: argparse.Namespace) -> int:
+    """The moments for measuring what a kind of note does: saved to their own file, for
+    ``run --cases FILE --carrying START`` (as she was asked) against ``... --drop-note START`` (without the note)."""
+    root = Path(args.root).resolve()
+    setup = await _config(root)
+    cases, after = await note_cases(root, setup.config, args.start, screen_new=args.screen, share=args.background)
+    out = Path(args.out) if args.out else _folder(root) / "notes" / f"{time.strftime('%Y%m%d')}.json"
+    save_cases(out, cases)
+    failed = [c for c in cases if c.failed]
+    print(
+        f"{len(cases)} judged turns carried a note starting {args.start[:40]!r}: {len(failed)} the user's next words "
+        f"went against, {len(cases) - len(failed)} fine.\n"
+        f"Usable: {sum(1 for c in cases if c.usable and c.failed)} failed, "
+        f"{sum(1 for c in cases if c.usable and not c.failed)} fine (unscreened failed ones: "
+        f"{sum(1 for c in failed if c.objected is None)}).\n"
+        f"After the note, the header goes on with: {dict(after.most_common(8))}\nSaved to {out}"
+    )
+    return 0
+
+
 async def _cmd_cases(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     setup = await _config(root)
@@ -983,7 +1094,8 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         setup.config = setup.config.model_copy(
             update={"brain": setup.config.brain.model_copy(update={"claude": claude})}
         )
-    cases = pick(load_cases(_folder(root) / CASES_FILE), args.half, args.keys, args.limit)
+    store = Path(args.cases) if args.cases else _folder(root) / CASES_FILE
+    cases = pick(load_cases(store), args.half, args.keys, args.limit)
     if not cases:
         print("No usable moments: run `cases --screen` first.")
         return 2
@@ -1014,6 +1126,8 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         workers=args.workers,
         may_go_on=allowed,
         on_result=shown,
+        carrying=args.carrying or "",
+        drop_note=args.drop_note or "",
     )
     record = {
         "at": started,
@@ -1024,6 +1138,8 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         "effort": setup.config.brain.claude.effort,
         "judge": JUDGE,
         "policy": args.policy or "",
+        "carrying": args.carrying or "",
+        "drop_note": args.drop_note or "",
         "grading": GRADING,
         "seconds": round(time.time() - started, 1),
         "stopped": stopped,
@@ -1232,6 +1348,11 @@ def _parser() -> argparse.ArgumentParser:
     cases.add_argument("--screen", action="store_true", help="ask the judge whether each failed one really objected")
     cases.add_argument("--controls", type=int, default=None, help="fine turns kept as a control (default: as many)")
     cases.add_argument("--background", action="store_true", help="within her background share of the usage budget")
+    notes = sub.add_parser("notes", help="the judged moments that carried a kind of note, for measuring what it does")
+    notes.add_argument("start", help="how the note begins")
+    notes.add_argument("--screen", action="store_true", help="ask the judge whether each new failed one objected")
+    notes.add_argument("--out", default=None)
+    notes.add_argument("--background", action="store_true", help="within her background share of the usage budget")
     for name in ("run", "ab"):
         p = sub.add_parser(name)
         p.add_argument("--half", choices=("train", "test"), default=None)
@@ -1244,6 +1365,11 @@ def _parser() -> argparse.ArgumentParser:
     sub.choices["run"].add_argument("--out", default=None)
     sub.choices["run"].add_argument("--background", action="store_true", help="within her background usage share")
     sub.choices["run"].add_argument("--policy", default=None, help="a file of text added to her prompt for this run")
+    sub.choices["run"].add_argument("--cases", default=None, help="another file of moments (default: cases.json)")
+    sub.choices["run"].add_argument(
+        "--carrying", default=None, help="only moments whose message had a note starting so"
+    )
+    sub.choices["run"].add_argument("--drop-note", default=None, help="ask without the note starting so")
     regrade = sub.add_parser("regrade", help="grade a kept run's replies again, without replaying")
     regrade.add_argument("run", nargs="?", default=None, help="the run's file (default: the newest)")
     regrade.add_argument("--judge", default=JUDGE, help="another judge model, to check this one (e.g. opus)")
@@ -1264,7 +1390,14 @@ def main(argv: list[str] | None = None) -> int:
         from octavia.config import find_project_root
 
         args.root = str(find_project_root())
-    command = {"cases": _cmd_cases, "run": _cmd_run, "ab": _cmd_ab, "regrade": _cmd_regrade, "table": _cmd_table}
+    command = {
+        "cases": _cmd_cases,
+        "notes": _cmd_notes,
+        "run": _cmd_run,
+        "ab": _cmd_ab,
+        "regrade": _cmd_regrade,
+        "table": _cmd_table,
+    }
     command = command[args.command]
     return asyncio.run(command(args))
 

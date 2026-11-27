@@ -247,6 +247,11 @@ class AudioConfig(_Section):
     # change and a recorded answer), right after her question, and the user didn't like it (2026-11-22).
     done_sound: bool = False
     headphones: bool = False  # no speaker echo: enables plain voice barge-in
+    # Directional audio (``audio/spatial.py``): her voice and sounds come from where she is on screen (the orb in the
+    # bottom right: a little to your right). Off: a mono stream, as before. Turning it on while she runs waits for a
+    # restart (the speaker opens in stereo); off is at once.
+    directional: bool = True
+    directional_width: float = Field(0.5, ge=0.0, le=1.0)  # how far to the side at the screen's edge (1: one ear only)
 
 
 class SherpaKwsConfig(_Section):
@@ -442,6 +447,9 @@ class FishAudioConfig(_Section):
     temperature: float | None = Field(None, ge=0, le=1)
     top_p: float | None = Field(None, ge=0, le=1)
     expressive_tags: bool = True  # let the model use S2 tone cues like [excited]
+    # A quick Haiku session places tone cues in each sentence after a reply's first, words unchanged, while the one
+    # before it plays; never waited on longer than that (``tts/cue_placer.py``). Needs expressive_tags and Claude.
+    place_cues: bool = True
     spare_socket_max_idle_s: float = Field(30.0, gt=0)
     base_url: str = "https://api.fish.audio"
 
@@ -478,6 +486,9 @@ class TTSConfig(_Section):
     # The text sent to Fish in one go. Small is smoother: Fish's audio for a piece comes in growing chunks, so a
     # long piece runs dry mid-sentence when Fish is slow (measured 2026-10-25: 7 pauses at 220, 2 at 40).
     min_chunk_chars: int = Field(40, ge=1, description="Send text to TTS in pieces of at least this many chars")
+    # Speech rhythm (``tts/rhythm.py``): pauses between pieces that vary with how one ended (longer after a question
+    # or a full stop than at a comma) and a pace per piece. Off: every join the voice's own ~0.3 s, one speed.
+    rhythm: bool = True
     # A backup voice for when Fish Audio fails: "windows" speaks with a built-in Windows voice, "none" stays silent.
     fallback: Literal["windows", "none"] = "windows"
     windows_voice: str = ""  # part of a Windows voice's name (e.g. "Zira"); "" = the first female English one

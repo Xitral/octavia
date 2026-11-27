@@ -27,7 +27,7 @@ import re
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +45,8 @@ from octavia.core.approvals import _REASK_UNCLEAR as _REASK_UNCLEAR
 from octavia.core.backchannel import Backchannel
 from octavia.core.claim_hold import ClaimHold, without_dropped
 from octavia.core.claims import Act
+from octavia.core.cut_off import AGAIN_S as _AGAIN_S
+from octavia.core.cut_off import Moment, Verdict, judge, short_cut_in
 from octavia.core.events import (
     AssistantState,
     BrainFinished,
@@ -70,7 +72,9 @@ from octavia.core.fast_path import spoken_model
 from octavia.core.handoff import Handoff
 from octavia.core.hearing import HearingMixin
 from octavia.core.hearing import strip_wake_phrase as strip_wake_phrase
+from octavia.core.hush import asks_for_hush
 from octavia.core.opening import OpeningMixin
+from octavia.core.panel_claims import PANEL_CALL
 from octavia.core.panel_claims import kinds as claim_kinds
 from octavia.core.panel_pointers import without_panel_pointers
 from octavia.core.pauses import only_fillers, sounds_unfinished
@@ -98,7 +102,7 @@ from octavia.core.turn_types import (
 from octavia.core.watchdog import QUESTION_BACKSTOP_S, TurnWatchdog
 from octavia.core.work_intent import WorkHold
 from octavia.core.yes_or_no import parse_confirmation as parse_confirmation
-from octavia.emotion.tone import ToneJob
+from octavia.emotion.tone import ToneJob, combine
 from octavia.localbrain.delegation import asks_something
 from octavia.stt.early import EarlyTranscriber
 from octavia.study.at_screen import OWED_NOTE, AwayFromScreen, panel_owed, studying_note
@@ -129,6 +133,9 @@ if TYPE_CHECKING:
     from octavia.wake.base import WakeWordDetector
 
 log = logging.getLogger(__name__)
+# A line the claim hold added ("the panel didn't come up") isn't said again for this many turns (2026-11-23: said after
+# four replies running, once the restart had closed the panel she kept pointing to).
+REPEAT_TURNS = 8
 _SENTENCE_END = re.compile(r"[.!?…][\"')\]]*(?:\s+|$)")  # where a whole sentence ends
 
 # Where a reply that isn't spoken is still shown to the user at the PC: the console and her chat window. (A text to
@@ -148,6 +155,16 @@ _DISMISSALS = {
     "that is all", "shut up", "be quiet", "quiet", "silence", "go away", "stop talking", "no thanks",
 }  # fmt: skip
 _INTERRUPTED_NOTE = "you were interrupted"
+# Told to stop talking over her, however speech recognition wrote it (``core/cut_off.py``): the next turn knows.
+_CUT_OFF_NOTE = (
+    'the user cut you off, telling you to stop talking (speech recognition heard "{heard}"), so you stopped'
+    " mid-sentence and said nothing more. Don't pick up where you left off or say it again unless they ask for it;"
+    " answer what they say now"
+)
+# A cut-in over her (``_cut_in``) is about the utterance it started capturing: one older than this isn't.
+_CUT_IN_FRESH_S = 30.0
+# The most a stop said over her waits for the voice tone's reading of it (usually done already, in the pause).
+_STOP_TONE_WAIT_S = 0.25
 # Her opening words (``core/opening.py``) began the reply out loud: the brain carries on from those exact words.
 _OPENED_NOTE = (
     'you have already begun your reply out loud with these exact words: "{words}". Carry straight on from them as one '
@@ -437,6 +454,9 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
         # Her calls in the few turns before this one (set by the app, ``ClaimWatch.earlier``): a claim about one of
         # them isn't held for a call in this turn (``claim_hold``).
         self.earlier_acts: Callable[[], list[Act]] | None = None
+        # The lines the claim hold added lately ("the panel didn't come up"), by the turn they were said in: one isn't
+        # said again within ``REPEAT_TURNS`` turns (until a panel comes up), only her brain is told.
+        self._hold_lines: dict[str, int] = {}
         # A sentence asking the user for a file she can read herself: stopped, and she goes and reads it.
         self.known_files: KnownFileGuard | None = None
         self._active_stream: SpeechStream | None = None
@@ -463,6 +483,19 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
         self._hushed_until: float | None = None
         self._hush_timer: asyncio.TimerHandle | None = None
         self._hushed_lines: list[tuple[Line, Callable[[], None], Callable[[str], None]]] = []
+        # While the user is focused with her (``focused``): her own lines waiting, why, and what lets them through.
+        self._focus_lines: list[tuple[Line, Callable[[], None], Callable[[str], None]]] = []
+        self._focus_why = ""
+        self._focus_task: asyncio.Task[None] | None = None
+        # Set by the app: more of what counts as the user being focused with her, each a few words ("" for not).
+        self.focus_probes: list[Callable[[], str]] = []
+        # A stop said over her (``core/cut_off.py``): whether what she says now is hers, unasked; when she began
+        # saying it (``time.monotonic``); the cut-in that started the capture now running (when, how far into her
+        # talking, over something unasked); and when the last short cut-ins came, for one said again.
+        self._saying_unasked = False
+        self._began_talking_at: float | None = None
+        self._cut_in: tuple[float, float | None, bool] | None = None
+        self._cut_ins: deque[float] = deque(maxlen=8)
         # Windows where the user said she may submit without asking, for this conversation: {(session, place)}.
         self._standing: set[tuple[str | None, str]] = set()
         # The conversation where the user said so before she had anything to submit: it goes to the first window
@@ -677,6 +710,7 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
             self._speaking_since = time.monotonic()
             if self._turn_active and self._turn_first_audio is None:
                 self._turn_first_audio = time.perf_counter()
+                self._began_talking_at = time.monotonic()  # her reply began: a stop over it soon after weighs more
         elif isinstance(event, SpeakingFinished) and self._speaking_since is not None:
             self._played_s += time.monotonic() - self._speaking_since
             self._speaking_since = None
@@ -840,11 +874,14 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
         return not (self.fast_path is not None and self.fast_path.match(text) is not None)
 
     def _for_the_brain(self, text: str) -> bool:
-        """Whether ``text`` would go to the brain: not a stop or dismissal, a preset reply, a quick command or small
-        talk for the quick voice (those answer at once, with no acknowledgment)."""
+        """Whether ``text`` would go to the brain: not a stop or dismissal (one said over her however it was heard
+        included: ``core/cut_off.py``), a preset reply, a quick command or small talk for the quick voice (those
+        answer at once, with no acknowledgment)."""
         core = self._addressed(text)
         if stop_kind(core) is not None or normalize_text(text) in _DISMISSALS or core in _DISMISSALS:
             return False
+        if self._cut_in is not None and self._stop_in_the_pause(core):
+            return False  # in the pause, a stop over her: no "On it!", no early start
         if self.quick_replies is not None and self.quick_replies.match(text) is not None:
             return False
         if asks_to_say_again(core) and self._to_say_again() is not None:
@@ -856,6 +893,68 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
         ):
             return False
         return not self._small_talk_fits(text, "voice")
+
+    def _moment(
+        self, cut_in: tuple[float, float | None, bool] | None, tone: ToneJob | None, again: bool | None
+    ) -> Moment:
+        """When an utterance was said, for ``core/cut_off.py``: over her or not (``cut_in``, fresh), how far into
+        her talking, over something unasked, said again (``again``; None: worked out from the cut-ins so far), and
+        how it sounded (``tone``, when its reading is done)."""
+        now = time.monotonic()
+        if cut_in is None or now - cut_in[0] > _CUT_IN_FRESH_S:
+            return Moment()
+        at, into_s, unasked = cut_in
+        if again is None:
+            again = any(0 < at - t <= _AGAIN_S for t in self._cut_ins)
+        label, confidence = _tone_read(tone)
+        return Moment(
+            over_her=True, into_s=into_s, again=again, tone=label, tone_confidence=confidence, unasked=unasked
+        )
+
+    def _stop_in_the_pause(self, core: str) -> bool:
+        """Whether what's been said over her so far may be a stop: judged as ``_stop_over_me`` will, and while
+        the voice tone isn't read yet, as if it sounded frustrated (that may be what makes it one), so "On it!" is
+        never said before a stop."""
+        moment = self._moment(self._cut_in, self._tone_job, again=None)
+        if moment.over_her and not moment.tone and self._tone_job is not None:
+            moment = replace(moment, tone="frustrated", tone_confidence=1.0)
+        return judge(core, moment).stop
+
+    def _sounds_like_stop(
+        self, core: str, cut_in: tuple[float, float | None, bool] | None, tone: ToneJob | None, again: bool | None
+    ) -> Verdict:
+        return judge(core, self._moment(cut_in, tone, again))
+
+    async def _stop_over_me(
+        self, text: str, core: str, cut_in: tuple[float, float | None, bool] | None, tone: ToneJob | None
+    ) -> Verdict | None:
+        """The verdict when ``text`` (``core``: ``addressed``'s) told her to stop talking though it isn't written as
+        a stop ("Good pop." for "shut up", said over her), else None. One written as such ("shut up", "stop") goes the
+        usual way. Short cut-ins over her are remembered, for one said again."""
+        if stop_kind(core) is not None or normalize_text(text) in _DISMISSALS or core in _DISMISSALS:
+            return None
+        if asks_for_hush(core):
+            return None  # "I said shut up": the hush takes it (``_heard_from_user``)
+        again: bool | None = None
+        if cut_in is not None and time.monotonic() - cut_in[0] <= _CUT_IN_FRESH_S and short_cut_in(core):
+            again = any(0 < cut_in[0] - t <= _AGAIN_S for t in self._cut_ins)
+            self._cut_ins.append(cut_in[0])
+            if tone is not None and not tone.future.done():
+                await asyncio.wait([asyncio.wrap_future(tone.future)], timeout=_STOP_TONE_WAIT_S)
+        verdict = self._sounds_like_stop(core, cut_in, tone, again)
+        if cut_in is not None:
+            log.info("Cut in over me with %r: %s", text, verdict)
+        return verdict if verdict.stop else None
+
+    def _told_to_stop(self, text: str, verdict: Verdict) -> None:
+        """Told to stop talking (``_stop_over_me``): quiet until they talk to her again (``_hush``), and the next
+        turn knows why she stopped."""
+        log.info("Told to stop talking (heard %r, like %r): quiet until they talk to me again", text, verdict.nearest)
+        self._hush()
+        self.events.emit(Dismissed(text=text))
+        self.events.emit(Notice(source="VOICE", message="Okay, quiet"))
+        self._pending_notes = [n for n in self._pending_notes if not n.startswith(_INTERRUPTED_NOTE)]
+        self._pending_notes.append(_CUT_OFF_NOTE.format(heard=text.strip()))
 
     def _on_screenshot(self, _: ScreenshotTaken) -> None:
         """The shutter sound: now, or on the avatar's flash when she's taking the picture with her camera. Checked a
@@ -998,6 +1097,7 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
             finally:
                 self._tone_wanted = False
                 self._follow_up_open = False
+                cut_in, self._cut_in = self._cut_in, None  # this capture's, if a cut-in over her started it
             seed = None
             if event.kind is EndpointKind.NO_SPEECH:
                 if not self._stop_requested:
@@ -1033,6 +1133,13 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
             if tone is not None:
                 tone.heard_at, tone.words = time.perf_counter(), words
             core = self._addressed(text)
+            if (verdict := await self._stop_over_me(text, core, cut_in, tone)) is not None:
+                # "Shut up", however it was heard ("Good pop."): her voice stopped at the cut-in already; the turn
+                # never reaches the brain, and she stays quiet until they talk to her again.
+                self._drop_early("they told me to stop talking")
+                self._learn_tone(tone)
+                self._told_to_stop(text, verdict)
+                return
             self._heard_from_user(core)
             kind = stop_kind(core)
             # A stop while a screen task works halts it ("stop everything": and clears its queue; "hold on": pauses
@@ -1041,6 +1148,8 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
             if stopped is not None or normalize_text(text) in _DISMISSALS or core in _DISMISSALS:
                 self._drop_early("it wasn't for the brain after all")
                 self._learn_tone(tone)
+                if cut_in is not None and stopped is None and not asks_for_hush(core):
+                    self._hush()  # "stop" said over her: quiet until they talk to her again, as "shut up" is
                 self.events.emit(Dismissed(text=text))
                 self.events.emit(Notice(source="VOICE", message="Okay, standing by"))
                 # The interruption is moot now; what was announced (e.g. a build is ready) still matters.
@@ -1276,6 +1385,9 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
         called: list[str] = []  # her tools this turn, as the brain named them
         steps: list[list[str]] = [[]]  # what she wrote between her steps (tool calls), for ``texted_reply``
         held: list[str] = []  # working quietly: what she's said since her last step, spoken only if it's her last
+        # ...and what she said before it: her last words when nothing follows her last step. Her words come first and
+        # her call last ("answer, then update_visual"), and three such replies in a row were never heard (2026-11-24).
+        before_step: list[str] = []
         # Mid-task, what she's written since her last step, held back while it could still be a note to herself
         # (``is_note_to_self``); None once it's been passed on to her voice.
         # A turn's first words too: "Need show_visual schema." was said as a whole reply before her first step.
@@ -1297,6 +1409,7 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
                 panels_up=self._panels_up,
                 earlier=self._earlier_acts,
                 flush=stream.flush,
+                told=lambda line: turn_id - self._hold_lines.get(line, -REPEAT_TURNS - 1) <= REPEAT_TURNS,
             )
             if stream is not None
             else None
@@ -1305,6 +1418,8 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
         def on_tool(event: ToolCallFinished) -> None:
             if claim is not None:
                 claim.finished(Act(event.name, event.ok, event.data, event.summary))
+            if event.ok and PANEL_CALL.search(event.name):
+                self._hold_lines.clear()  # a panel came up: if one goes missing again, she says so again
 
         stop_hearing_tools = self.events.subscribe(on_tool, ToolCallFinished)
 
@@ -1356,7 +1471,10 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
                         elif ev.name in READS_OUTSIDE:  # mail, posts, the screen: others' words (``READS_OUTSIDE``)
                             self._turn_read_outside = True
                         if quiet:
-                            held.clear()  # said on the way to a step: not spoken
+                            line = "".join(held)
+                            if line.strip() and not about_her_tools(line, tool_names) and not is_note_to_self(line):
+                                before_step[:] = held  # said on the way to a step: not spoken, unless it's her last
+                            held.clear()
                             if claim is not None:
                                 claim.step()
                         elif stream is not None:
@@ -1378,15 +1496,23 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
                 done_event = ResponseDone(text="".join(pieces), error=f"{type(exc).__name__}: {exc}")
             stop_hearing_tools()
             if stream is not None and claim is not None:
+                if quiet and not "".join(held).strip():
+                    held[:] = before_step
                 last = "".join(held or pending or ())
                 if pending and not held and about_her_tools(last, tool_names):
                     log.info("Not saying her note to herself at the end: %r", last.strip())
                 elif held or pending:
                     claim.text(last)  # what she said once she was done
                 interrupted_now = self._interrupt.is_set()
-                if not interrupted_now and (added := claim.finish()):
-                    log.info("Claims not borne out (dropped: %r): said %r", claim.dropped, added)
-                    not_up[:] = [added]
+                if not interrupted_now:
+                    if added := claim.finish():
+                        log.info("Claims not borne out (dropped: %r): said %r", claim.dropped, added)
+                        not_up[:] = [added]
+                    for line in claim.once:
+                        if line in claim.added:
+                            self._hold_lines[line] = turn_id
+                    if claim.repeated:
+                        log.info("Not saying again (said lately): %r", claim.repeated)
                     for note in claim.notes[:2]:
                         self.note(note)
                 if done_event is not None and done_event.error and not pieces:
@@ -1640,6 +1766,8 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
             notes.append(heard)
         if self.unprompted is not None and (waved := self.unprompted.turn_note()):
             notes.append(waved)  # subjects the user waved off: not brought up in a reply either
+        if source in _USER_SOURCES and (held := self.held_for_turn(text, keep=keep)):
+            notes.append(held)  # "any news?" while her own lines wait for focus or a hush: the brain tells them
         self._tuning = ()
         if self.tuner is not None:
             try:
@@ -1957,3 +2085,13 @@ class Assistant(HearingMixin, AnnouncingMixin, QuickTurnsMixin, ApprovalsMixin, 
 
     def _turn_interrupted(self) -> bool:
         return self._interrupt is not None and self._interrupt.is_set()
+
+
+def _tone_read(job: ToneJob | None) -> tuple[str, float]:
+    """The voice tone's reading of an utterance, when it's done: its label and confidence, from the model alone (the
+    turn concludes it, cues and all, and learns from it: ``_heard_tone``). ("", 0.0) when there's none yet."""
+    future = job.future if job is not None else None
+    if future is None or not future.done() or future.cancelled() or future.exception() is not None:
+        return "", 0.0
+    tone = combine(future.result().probs)
+    return tone.tone, tone.confidence

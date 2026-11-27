@@ -26,6 +26,7 @@ class Announcement:
     cue: str | None = None  # what kind it is (AnnouncementStarted)
     offer: Offer | None = None  # the one call it offers to make, which a plain yes in the next turn approves
     full: str | None = None  # the whole of it, when ``text`` says only part (shown in the chat window)
+    unasked: bool = False  # hers, nobody asked for it (status news, her own idea): ``core/cut_off.py`` weighs it
 
 
 @dataclass
@@ -49,6 +50,7 @@ class BackgroundTurn:
     started: bool = False  # taken out of the line and running
     stop_wanted: bool = False  # a texted stop came for it (``stop_from``): it's stopped at the first chance
     cue: str | None = None  # what kind of remark of hers it is ("morning"), for the avatar, as an announcement's
+    unasked: bool = False  # hers, nobody asked for it (``tell_in_own_words`` of her news or idea)
 
 
 @dataclass

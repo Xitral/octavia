@@ -8,6 +8,10 @@ open, so a report never passes off an agent's word as a result:
 * ``Step.evidence``: what the checks found, by code and by a reviewer that didn't do the work. Only a step whose
   checks passed is ``verified``.
 * ``Step.problem`` and the failed or skipped steps: what's unresolved, and why.
+
+The steps are also the objective's ledger. When a step fails, the rest is planned again with what happened known
+(``ObjectiveRunner._replan``): the steps the new plan takes over stay on the record as ``replaced``, with why they
+failed, and the new ones are added after them. So what was tried is never lost, across attempts, restarts and days.
 """
 
 from __future__ import annotations
@@ -32,6 +36,9 @@ VERIFIED = "verified"  # its checks passed
 FAILED = "failed"  # its last attempt failed its checks, or it couldn't run
 SKIPPED = "skipped"  # a step it needs failed
 CANCELLED = "cancelled"
+REPLACED = (
+    "replaced"  # it failed, was skipped or hadn't started, and a later plan took its place (``problem`` says why)
+)
 STEP_OPEN = (PENDING, RUNNING, CHECKING)
 
 # Objectives
@@ -41,11 +48,15 @@ DONE = "done"  # every step verified
 UNFINISHED = "unfinished"  # it ended with some steps failed or skipped
 OBJECTIVE_FAILED = "failed"  # it couldn't be planned or started
 OBJECTIVE_CANCELLED = "cancelled"
+BLOCKED = "blocked"  # it can't go on without something only the user can give (``blocked_on``); picked up on their word
 OPEN = (PLANNING, WORKING)
+RESUMABLE = (UNFINISHED, BLOCKED)  # ended short of the goal: can be taken up again from what's on the record
 
 MAX_STEPS = 8  # a plan with more is cut to the first ones (and says so): no endless decomposition
 MAX_ATTEMPTS = 2  # an attempt that fails its checks gets one more with the reviewer's findings; then it's failed
 MAX_INTERRUPTIONS = 3  # restarts that cut a step off; after these it's failed rather than resumed forever
+MAX_REPLANS = 2  # times the rest of an objective is planned again after a step failed; then it ends unfinished
+MAX_RESUMES = 3  # times an objective that ended short is taken up again
 
 
 @dataclass
@@ -102,10 +113,20 @@ class Objective:
     # "user" (handed to her) or "proactive" (her own overnight work, ``octavia/proactive``): prepared work only, on her
     # own share of the usage budget, and not announced when it ends (the morning handoff says it).
     origin: str = "user"
+    replans: int = 0  # times the rest was planned again after a step failed (``MAX_REPLANS``)
+    blocked_on: str = ""  # what only the user can give for it to go on, in a sentence
+    blocked_before: list[str] = field(default_factory=list)  # what it was blocked on each time it was taken up again
+    resumes: int = 0  # times it was taken up again after ending short (``MAX_RESUMES``)
+    notes: list[str] = field(default_factory=list)  # what the user said when they had it taken up again
 
     @property
     def open(self) -> bool:
         return self.status in OPEN
+
+    @property
+    def live_steps(self) -> list[Step]:
+        """The plan as it stands: every step but the ones a later plan replaced."""
+        return [s for s in self.steps if s.status != REPLACED]
 
     def step(self, step_id: int) -> Step | None:
         return next((s for s in self.steps if s.id == step_id), None)

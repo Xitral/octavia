@@ -63,12 +63,31 @@ _SMALL_TALK = {
     "goodbye", "see you", "love you", "you're the best", "yes", "no", "yeah", "nope", "sure",
 }  # fmt: skip
 _WORD = re.compile(r"[a-z']+")
+# A thank-you or a compliment ("thank you so much", "good job", "you're a lifesaver"): her brain takes it, with what
+# she just did in mind. The scripted preset lines it replaced lost to her brain on both judges, natural 21-9 and 27-3,
+# character 21-8 and 23-7 (2026-11-25); her quick voice tied the presets on natural and lost on character.
+_THANKS_OR_PRAISE = re.compile(
+    r"\b(?:thanks|thank you|thank u|ty|thx|cheers|appreciate (?:it|you|that)|much appreciated|you'?re a lifesaver|"
+    r"you saved me|(?:good|great|nice) (?:job|work|one)|well done|you(?:'?re| are) (?:so |really |the )?(?:awesome|amazing|"
+    r"incredible|the best|brilliant|smart|a genius|a legend|the goat)|that was (?:impressive|amazing|awesome|great|"
+    r"perfect|sick)|you did (?:great|good|amazing|it)|you nailed it|nailed it|you rock|proud of you)\b"
+)
+_DECLINES = re.compile(r"^(?:no|nope|nah|not now|no no)\b")
+
+
+def thanks_or_praise(text: str) -> bool:
+    """Whether ``text`` is a short thank-you or compliment, not a "no thanks" to an offer."""
+    norm = " ".join(_WORD.findall(text.lower().replace("octavia", "")))
+    words = norm.split()
+    if not 0 < len(words) <= 10 or _DECLINES.match(norm) or any(w in _REQUEST_VERBS for w in words):
+        return False  # "no thanks" answers an offer; "thanks, now open Spotify" is a request
+    return bool(_THANKS_OR_PRAISE.search(norm))
 
 
 def classify(text: str) -> str | None:
     """Kind of utterance: question, request or other. None when no acknowledgment fits (small talk)."""
     norm = " ".join(_WORD.findall(text.lower()))
-    if not norm or norm in _SMALL_TALK:
+    if not norm or norm in _SMALL_TALK or thanks_or_praise(text):
         return None
     words = norm.split()
     if len(words) <= 1:

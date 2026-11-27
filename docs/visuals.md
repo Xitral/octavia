@@ -346,6 +346,14 @@ study at the screen with a panel up, a sentence saying how things stand now ("SA
 it's never dropped, but with no panel call done it adds that the panel doesn't show it yet.
 Both are now kinds of the one claim hold for every tool (`core/claim_hold.py`, architecture section 12).
 
+Said once, not nagged (2026-11-23: four "the panel didn't come up" asides in ten minutes of study). With a panel up,
+saying what's on it ("the question is up on the panel") is said as written unless a panel call follows it in the turn
+(then it waits for that call like a change does); what it told or asked someone about panels, and quoted words, aren't
+claims. The line is said once (only this line: "that didn't go through" always follows its claim): within the next eight turns, until one
+of its panel calls comes back done, a claim about a missing panel is just left out, and its brain is told none of its
+panels is on screen (a restart closes them all). An input block may give one question straight (`prompt`, `choices`,
+`answer`) in the schema too, so a show_visual like that night's isn't refused before it reaches the panel.
+
 A quiz question's choice field can carry its right `answer` (never shown): it must be one of the choices, so a round
 can't ask for an answer its buttons don't offer. What it's told is on a panel lists each field's buttons (and
 answer), so a set left over from the last round shows.

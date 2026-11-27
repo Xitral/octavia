@@ -5,6 +5,8 @@ Windows, ``OUTPUT_LATENCY_S`` of buffer) plays chunks from a deque. ``clear()`` 
 everything with a 6 ms fade so barge-in is click-free; what the device already
 holds (``OUTPUT_LATENCY_S``) still plays out.
 ``mark(cb)`` lets the speech pipeline learn when each sentence has been played.
+With a ``Panner`` (``audio/spatial.py``, ``audio.directional``) the stream is stereo: everything is mixed in mono as
+before, then spread over the two channels by where she is on screen.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import numpy as np
 
 from octavia.audio.devices import DeviceChoice, add_reinit_hook, choose_device, ensure_com, reinitialize_portaudio
 from octavia.audio.sink import AudioSink
+from octavia.audio.spatial import Panner
 
 log = logging.getLogger(__name__)
 
@@ -45,8 +48,14 @@ class SoundDevicePlayer(AudioSink):
         host_api: str | None = None,
         fade_ms: float = 6.0,
         latency: str | float = OUTPUT_LATENCY_S,
+        spatial: Panner | None = None,
     ) -> None:
         self.sample_rate = sample_rate
+        # Directional audio (``audio/spatial.py``): a stereo stream, her mono mix panned by where she is. None: mono,
+        # as it always was. A speaker that won't open in stereo opens in mono instead (``channels`` says which).
+        self.spatial = spatial
+        self.channels = 2 if spatial is not None else 1
+        self.spatial_errors = 0
         self.device_ref = device
         self.host_api = host_api
         self.latency_setting = latency
@@ -98,21 +107,38 @@ class SoundDevicePlayer(AudioSink):
         self._starved_after = 0.0  # a stream starting up isn't the speaker running dry
 
         self.choice = choose_device(self.device_ref, "output", self.host_api)
-        stream = sd.OutputStream(
-            samplerate=self.sample_rate,
-            channels=1,
-            dtype="float32",
-            device=self.choice.index,
-            latency=self.latency_setting,
-            extra_settings=self.choice.extra_settings,
-            callback=self._callback,
-        )
+
+        def opened(channels: int):
+            return sd.OutputStream(
+                samplerate=self.sample_rate,
+                channels=channels,
+                dtype="float32",
+                device=self.choice.index,
+                latency=self.latency_setting,
+                extra_settings=self.choice.extra_settings,
+                callback=self._callback,
+            )
+
+        try:
+            stream = opened(self.channels)
+        except Exception:
+            if self.channels == 1:
+                raise
+            log.warning("The speaker didn't open in stereo, so her voice comes from the middle", exc_info=True)
+            self.channels = 1
+            stream = opened(1)
         self._last_callback = time.monotonic()
         self._last_block = 0.0
         stream.start()
         self._stream = stream
         self._starved_after = self.latency
-        log.info("Speaker: %s (%s), latency %.0f ms", self.choice.name, self.choice.host_api, self.latency * 1000)
+        log.info(
+            "Speaker: %s (%s), latency %.0f ms%s",
+            self.choice.name,
+            self.choice.host_api,
+            self.latency * 1000,
+            ", stereo (her voice from where she is)" if self.channels == 2 else "",
+        )
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -340,8 +366,11 @@ class SoundDevicePlayer(AudioSink):
         # buffer counts too: the device had nothing left to play.
         if late or getattr(status, "output_underflow", False):
             self.device_underruns += 1
-        buf = outdata[:, 0]
-        buf.fill(0.0)
+        stereo = self.channels == 2 and outdata.shape[1] == 2
+        # In stereo everything is mixed in mono first, as it always was, and spread over the channels at the end.
+        buf = np.zeros(frames, dtype=np.float32) if stereo else outdata[:, 0]
+        if not stereo:
+            buf.fill(0.0)
         with self._lock:
             had_audio = self._queued > 0
             got, marks = self._pull_locked(frames, buf)
@@ -369,6 +398,20 @@ class SoundDevicePlayer(AudioSink):
                     log.warning("Playback tap failed; continuing without it", exc_info=True)
         if self.muted:
             buf.fill(0.0)
+        if stereo:
+            spatial = self.spatial
+            placed = False
+            if not self.muted and spatial is not None:
+                try:
+                    spatial.render(buf, outdata)
+                    placed = True
+                except Exception:
+                    self.spatial_errors += 1  # a panner that fails must never stop her voice
+                    if self.spatial_errors == 1:
+                        log.warning("Placing her voice failed; she plays from the middle", exc_info=True)
+            if not placed:
+                outdata[:, 0] = buf  # the middle, both channels the same, as mono was
+                outdata[:, 1] = buf
         if marks:
             self._fire(marks)
 

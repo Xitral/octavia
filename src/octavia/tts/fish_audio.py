@@ -69,11 +69,17 @@ MIN_PROSODY_SPEED = 0.5
 MAX_PROSODY_SPEED = 2.0
 # How long to stay on HTTP after a WebSocket handshake failed, before trying the socket again.
 WS_COOLDOWN_S = 60.0
+# How long to wait before trying a sentence once more after Fish answered it with a server error (5xx).
+RETRY_5XX_S = 0.5
 # An HTTP connection is kept open this long after its last use, and a turn that begins with none used more recently
 # than HTTP_WARM_S opens one while the brain thinks (a sentence on a cold connection: 0.70 s to its first audio, on
 # an open one 0.59 s; 2026-11-22).
 HTTP_KEEPALIVE_S = 30.0
 HTTP_WARM_S = 20.0
+
+
+class _ServerError(TTSError):
+    """Fish answered with a 5xx before any audio: its side, often passing."""
 
 
 class _HandshakeError(TTSError):
@@ -182,7 +188,7 @@ class FishAudioTTS(TTSProvider):
             log.debug("Couldn't open a connection to Fish Audio ahead of the sentence", exc_info=True)
 
     # -- request -----------------------------------------------------------------
-    def build_request(self, text: str) -> dict[str, Any]:
+    def build_request(self, text: str, pace: float = 1.0) -> dict[str, Any]:
         req: dict[str, Any] = {
             "text": text,
             "format": "pcm",
@@ -190,7 +196,7 @@ class FishAudioTTS(TTSProvider):
             "latency": self.cfg.latency,
             "chunk_length": self.cfg.chunk_length,
             "normalize": True,
-            "prosody": {"speed": self._speed(), "volume": 0, "normalize_loudness": True},
+            "prosody": {"speed": self._speed(pace), "volume": 0, "normalize_loudness": True},
             "temperature": self.temperature,
         }
         if self.reference_id:
@@ -199,21 +205,27 @@ class FishAudioTTS(TTSProvider):
             req["top_p"] = self.cfg.top_p
         return req
 
-    def _speed(self) -> float:
-        speed = self._delivery().speed
+    def _speed(self, pace: float = 1.0) -> float:
+        """The configured speed, times a slowed or quickened style, times this sentence's ``pace``
+        (``tts/rhythm.py``)."""
+        speed = self._delivery().speed * pace
         if speed == 1.0:
             return self.cfg.speed
-        return round(min(MAX_PROSODY_SPEED, max(MIN_PROSODY_SPEED, self.cfg.speed * speed)), 2)
+        return round(min(MAX_PROSODY_SPEED, max(MIN_PROSODY_SPEED, self.cfg.speed * speed)), 3)
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}", "model": self.cfg.model}
 
-    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+    paces = True  # takes a pace per sentence (``synthesize(text, pace=...)``)
+
+    async def synthesize(self, text: str, pace: float = 1.0) -> AsyncIterator[bytes]:
         if not text.strip():
             return
         if self._delivery().whisper:
             text = whispered(text)
-        stream = self._ws_or_http(text) if self.cfg.transport == "websocket" else self._http_synthesize(text)
+        stream = (
+            self._ws_or_http(text, pace) if self.cfg.transport == "websocket" else self._http_synthesize(text, pace)
+        )
         carry = b""
         first = True
         # aclosing: close the socket deterministically when the consumer stops early (barge-in).
@@ -233,7 +245,7 @@ class FishAudioTTS(TTSProvider):
     def _ws_cooling_down(self) -> bool:
         return time.monotonic() < self._ws_down_until
 
-    async def _ws_or_http(self, text: str) -> AsyncIterator[bytes]:
+    async def _ws_or_http(self, text: str, pace: float = 1.0) -> AsyncIterator[bytes]:
         """Speak over the WebSocket, or over HTTP when it can't be opened.
 
         A handshake failure happens before any audio is yielded, so the HTTP
@@ -242,7 +254,7 @@ class FishAudioTTS(TTSProvider):
         ws_error: _HandshakeError | None = None
         if not self._ws_cooling_down():
             try:
-                async with contextlib.aclosing(self._ws_synthesize(text)) as stream:
+                async with contextlib.aclosing(self._ws_synthesize(text, pace)) as stream:
                     async for chunk in stream:
                         yield chunk
                 return
@@ -251,7 +263,7 @@ class FishAudioTTS(TTSProvider):
                 self._ws_down_until = time.monotonic() + WS_COOLDOWN_S
                 log.warning("%s; speaking over HTTP for the next %.0f s", exc, WS_COOLDOWN_S)
         try:
-            async with contextlib.aclosing(self._http_synthesize(text)) as stream:
+            async with contextlib.aclosing(self._http_synthesize(text, pace)) as stream:
                 async for chunk in stream:
                     yield chunk
         except TTSError as exc:
@@ -313,7 +325,7 @@ class FishAudioTTS(TTSProvider):
         self._replace_spare()
         return ws
 
-    async def _ws_synthesize(self, text: str) -> AsyncIterator[bytes]:
+    async def _ws_synthesize(self, text: str, pace: float = 1.0) -> AsyncIterator[bytes]:
         import ormsgpack
         from websockets.exceptions import ConnectionClosed, InvalidStatus, WebSocketException
 
@@ -321,7 +333,12 @@ class FishAudioTTS(TTSProvider):
             try:
                 ws = await self._take_socket()
             except InvalidStatus as exc:
-                raise TTSError(_describe_http_status(exc.response.status_code, self.cfg.api_key_env)) from exc
+                status = exc.response.status_code
+                if status >= 500:
+                    # Fish's side is down or overloaded (503 for two minutes on 2026-11-24, every reply silent): a
+                    # passing failure, so the sentence goes over HTTP like any other handshake that couldn't finish.
+                    raise _HandshakeError(f"Fish Audio's live socket is unavailable (HTTP {status})") from exc
+                raise TTSError(_describe_http_status(status, self.cfg.api_key_env)) from exc
             except OSError as exc:  # includes TimeoutError("timed out during opening handshake")
                 raise _HandshakeError(f"Can't reach Fish Audio: {exc}") from exc
             except WebSocketException as exc:  # other handshake failures (bad upgrade response, proxy, ...)
@@ -329,7 +346,7 @@ class FishAudioTTS(TTSProvider):
             got_audio = False
             finished = False
             try:
-                await ws.send(ormsgpack.packb({"event": "start", "request": self.build_request("")}))
+                await ws.send(ormsgpack.packb({"event": "start", "request": self.build_request("", pace)}))
                 await ws.send(ormsgpack.packb({"event": "text", "text": text}))
                 await ws.send(ormsgpack.packb({"event": "stop"}))
                 while True:
@@ -363,7 +380,21 @@ class FishAudioTTS(TTSProvider):
                     await asyncio.wait_for(ws.close(code=1000, reason="" if finished else "cancel"), 1.0)
 
     # -- http transport ----------------------------------------------------------
-    async def _http_synthesize(self, text: str) -> AsyncIterator[bytes]:
+    async def _http_synthesize(self, text: str, pace: float = 1.0) -> AsyncIterator[bytes]:
+        """One sentence over HTTP. A 5xx from Fish before any audio is tried once more after ``RETRY_5XX_S``."""
+        for attempt in range(2):
+            try:
+                async with contextlib.aclosing(self._http_once(text, pace)) as stream:
+                    async for chunk in stream:
+                        yield chunk
+                return
+            except _ServerError:
+                if attempt:
+                    raise
+                log.info("Fish Audio answered with a server error; trying the sentence once more")
+                await asyncio.sleep(RETRY_5XX_S)
+
+    async def _http_once(self, text: str, pace: float = 1.0) -> AsyncIterator[bytes]:
         import ormsgpack
 
         http = self._http_client()
@@ -371,12 +402,13 @@ class FishAudioTTS(TTSProvider):
         self._http_used = time.monotonic()
         try:
             async with http.stream(
-                "POST", self._http_url, headers=headers, content=ormsgpack.packb(self.build_request(text))
+                "POST", self._http_url, headers=headers, content=ormsgpack.packb(self.build_request(text, pace))
             ) as response:
                 if response.status_code != 200:
                     body = (await response.aread())[:300]
                     status = _describe_http_status(response.status_code, self.cfg.api_key_env)
-                    raise TTSError(f"{status}: {body!r}")
+                    error = _ServerError if response.status_code >= 500 else TTSError
+                    raise error(f"{status}: {body!r}")
                 async for chunk in response.aiter_bytes():
                     if chunk:
                         yield chunk

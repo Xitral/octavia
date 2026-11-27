@@ -721,6 +721,9 @@ class AvatarBridge:
         self.events = events
         self.sample_rate = sample_rate
         self.on_click: Callable[[], None] | None = None  # the app points this at "start listening"
+        # Where she is across the main monitor (-1 left edge .. 1 right edge), None when not known (the app stopped):
+        # the app points this at the speaker's panner, so her voice comes from her (``audio/spatial.py``).
+        self.on_where: Callable[[float | None], None] | None = None
         # The text of her pop-up panels up now: a sentence they already show gets no subtitle (avatar/subtitles.py).
         self.panel_text: Callable[[], Iterable[str]] | None = None
         self._spawn = spawn or asyncio.create_subprocess_exec
@@ -896,6 +899,7 @@ class AvatarBridge:
             code = await self._proc.wait()
             await asyncio.gather(*readers, return_exceptions=True)
             self._ready = False
+            self._where(None)  # no app, no place: her voice goes back to the middle
             if self._closed:
                 return
             crashes = crashes + 1 if self._clock() - started < 60.0 else 1
@@ -961,10 +965,23 @@ class AvatarBridge:
             log.debug("Avatar hidden")
         elif kind == "moved":
             log.debug("Avatar moved to %s, %s", message.get("x"), message.get("y"))
+        elif kind == "where":
+            x = message.get("x")
+            if isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x):
+                self._where(max(-1.0, min(1.0, float(x))))
         elif kind == "hover":
             self._hover(message.get("over") is True)
         elif kind == "error":
             self._notice(f"Avatar: {message.get('message', 'something went wrong')}", logging.WARNING)
+
+    def _where(self, x: float | None) -> None:
+        on_where = self.on_where
+        if on_where is None:
+            return
+        try:
+            on_where(x)
+        except Exception:
+            log.warning("Couldn't place her voice", exc_info=True)
 
     # ------------------------------------------------------------------ sending
 

@@ -203,6 +203,7 @@ it quits.
 | `{"type":"hover","over":true}` | the pointer came onto its pixels (`true`; it fades and lets clicks through) or left its window (`false`, 0.3 s after) |
 | `{"type":"click"}` | the user clicked the character, holding Ctrl (OCTAVIA starts listening, like the wake word) |
 | `{"type":"moved","x":1200,"y":400}` | the user dragged the window here (also saved to `statePath`) |
+| `{"type":"where","x":0.82}` | where it is across the main monitor (-1 left edge, 0 middle, 1 right edge, held at the edge past it): its window at home, its body while away; sent after `ready` and whenever it moves by 0.01 or more (looked at every 150 ms). OCTAVIA plays its voice from there (`src/octavia/audio/spatial.py`) |
 | `{"type":"hidden"}` | the pop-out animation ended (also after a `hide` that ended pointing) |
 | `{"type":"captured","path":"..."}` | a capture was written |
 | `{"type":"shutter"}` | the snapshot's shutter was pressed just now (the flash): OCTAVIA plays the shutter sound on that beat |

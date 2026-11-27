@@ -40,7 +40,7 @@ from octavia.brain.claude import MAX_MESSAGE_BYTES, cli_environment, prepare_pro
 from octavia.brain.prompt import render_template
 from octavia.config import ClaudeConfig, FastChatConfig
 from octavia.core import usage as claude_usage
-from octavia.core.acknowledge import classify
+from octavia.core.acknowledge import classify, thanks_or_praise
 from octavia.core.text import normalize_text
 
 log = logging.getLogger(__name__)
@@ -105,6 +105,8 @@ def small_talk(text: str, max_words: int) -> bool:
     """Whether ``text`` sounds like chit-chat worth trying on the quick voice first: short, not a request ("open
     Spotify"), and not a question unless it's a social one ("how's it going?"). Statements and reactions ("that's
     hilarious", "I'm so tired today") count; the quick voice hands the ones that need more to the brain."""
+    if thanks_or_praise(text):
+        return False  # her brain takes a thank-you or a compliment, with what she just did in mind (acknowledge.py)
     rest = _GREETING.sub("", text, count=1)  # "Hey Octavia, how are you?" is "how are you?"
     if text.strip() and not rest.strip():
         return True  # a greeting and nothing else: "hi there!"

@@ -249,6 +249,7 @@ INTERNAL = frozenset(
         "ANTHROPIC_AUTH_TOKEN",
         "OCTAVIA_USER_DIR",
     }
+    | {"ETHER_TRIAL_LESSON"}  # a lesson being measured before it's shared (``hive/measure.py``), its own process only
     | {"OCTAVIA_EVAL_JUDGE"}  # the eval's judge pick (``evolve/evals.py`` --judge), set for its own runs
 )
 # Words too common in key names to say two keys are the same thing.

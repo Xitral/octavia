@@ -25,6 +25,39 @@ Only things that make the next version more capable, never memories:
 The shared cases are the yardstick: every release records how many it passes (`octavia ether status`), so whether the
 collective gets more capable is a number per release.
 
+## What was learned, one item at a time
+
+A lesson doesn't wait for a release, and doesn't need one to be taken back. The signed feed carries **items**
+beside the releases: each lesson with an id, a version, what it was accepted on, and whether it still stands.
+
+- **Measured before it's shared.** A lesson is shared with the case it fixes. `octavia ether share-lesson "..."
+  --case <shared case> --feed <folder>` asks that case five times without the lesson and five times with it. The
+  lesson is taken only when every ask was answered, the case passes at least two thirds of the time with it, and
+  the difference is one chance makes no more than once in twenty (1 of 5 against 5 of 5 is; 2 of 5 against 5 of 5
+  isn't yet, and `--tries 8` settles it either way); then every shared case is run with it in and without, and it's refused if the total
+  drops by more than the set's own one-case flake. The numbers go into the feed with the item. A lesson is a
+  sentence or two (300 characters at most), and it's still read by the maintainer before it's shared: the
+  measurement says it helps, not that it's harmless.
+- **Taken in at the next look.** An install checks the feed every `hive.check_every_h` hours; the active items go
+  into its prompt then, no update, no restart. The newest twenty from the feed and the newest twenty a release
+  shipped, so neither crowds the other out.
+- **Revocable.** `octavia ether revoke <id> --reason "..." --feed <folder>` marks it revoked; every install drops it
+  at its next look at the current feed. A lesson a release shipped is revoked the same way with `--shipped`.
+- **Yours to refuse.** `octavia ether items` lists them with their measured effect; `octavia ether drop <id>` leaves
+  one out on your install (`--undo` takes that back).
+- **A feed that can't be turned back.** Every signing raises the feed's serial and renews its date (60 days;
+  `octavia ether renew --feed <folder>` signs it again when nothing new is published). An install refuses a feed
+  older than one it has already trusted, however well signed. What that doesn't cover, said plainly: an install
+  that has never seen a newer feed takes an older one, and whoever serves the feed could keep handing out the copy
+  from before a revoke. That's what the date is for: after 60 days at most that copy is refused, and the install
+  takes the feed's items out of its prompt until it sees a current one.
+- **An update that can be undone.** The files an update replaces are kept; `octavia ether rollback` puts them back
+  (one update back). An update or an undo that stops partway can be run again. Packages a newer release installed
+  stay installed.
+- **A pass rate that's computed.** `octavia ether publish` and `octavia release github` run the shared cases
+  themselves; a typed number is no longer taken. A release isn't published when not every case could be asked, or
+  when it passes fewer than the last one (`--allow-drop` for the second).
+
 ## Privacy
 
 - `hive.share` is off unless you turn it on (the setup wizard asks).

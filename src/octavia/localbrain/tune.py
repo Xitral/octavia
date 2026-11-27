@@ -17,7 +17,21 @@ The newest ``held_share`` of the turns the router would ask it about are held ou
 turn with the same words: ``score`` replays them through the router's own local turn
 (``router.RoutedBrain._local_turn``, its checks and confidence bar), so a score says what the user would have heard.
 
+What it's trained on is guarded against what she's measured on (2026-11-25; a replay once wrote 5,374 lines into her
+live transcripts, and nothing here would have noticed):
+
+* only her own brain's sessions are read (not another working folder's that happens to end the same way), and never
+  a line a replay or a side session wrote;
+* the split is by time: every training turn is older than the oldest held-out turn, so no training turn carries a
+  held-out one in its history either;
+* a turn that is one of the growth check's held-out moments (``evolve/replay``'s test half), or has the same words as
+  one, never trains;
+* ``build`` writes ``manifest.json`` (what was left out and why, a hash of every turn's words, the files' own
+  hashes) and ``check`` proves all of the above again from the files; the trainer refuses data without a manifest
+  that matches (``scripts/local_brain_train.py``).
+
   uv run python -m octavia.localbrain.tune build [--root MAIN] [--out DIR]
+  uv run python -m octavia.localbrain.tune check [--root MAIN] [--out DIR]
   uv run python -m octavia.localbrain.tune eval --url http://127.0.0.1:8092 --label tuned [--lora 1.0] [--out DIR]
 """
 
@@ -25,7 +39,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import glob
+import hashlib
 import json
 import random
 import re
@@ -49,7 +63,9 @@ from octavia.localbrain.delegation import (
     required_note,
 )
 
-TRANSCRIPTS = "data/claude-home/projects/*-data-brain/*.jsonl"
+GUARD = 1  # the version of the rules above a manifest was built under
+MANIFEST = "manifest.json"
+REPLAY_CASES = "data/eval/replay/cases.json"
 ROUTING_LOG = "data/routing_log.jsonl"
 OUT = Path("E:/local-llm/finetune/data/route")
 _USER_SOURCES = ("voice", "text", "discord", "window")
@@ -130,6 +146,7 @@ class Turn:
     results: list[str] = field(default_factory=list)  # each tool result, in order
     reply: str = ""  # everything Claude said in the turn
     history: list[tuple[str, str]] = field(default_factory=list)  # (they said, she said) before it, oldest first
+    line: int = -1  # the line of the user's message in the session's file
 
 
 @dataclass
@@ -145,6 +162,8 @@ class Example:
     after: dict[str, Any] | None = None  # for "tool": the tool's result and Claude's reply to it
     claude_tools: list[str] = field(default_factory=list)
     reply: str = ""
+    session: str = ""  # the session's file (its name without .jsonl) and the line of the user's message in it
+    line: int = -1
 
 
 # ---------------------------------------------------------------------------------------------------- reading
@@ -192,11 +211,13 @@ def read_session(lines: Iterable[str], session: str = "") -> list[Turn]:
     turns: list[Turn] = []
     current: Turn | None = None
     step: list[dict[str, Any]] = []
-    for line in lines:
+    for number, line in enumerate(lines):
         try:
             entry = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(entry, dict) or entry.get("isSidechain") or replayed(entry):
+            continue  # a side session's line, or one a replay wrote: never hers to learn from
         kind = entry.get("type")
         content = (entry.get("message") or {}).get("content")
         if kind == "user":
@@ -218,7 +239,7 @@ def read_session(lines: Iterable[str], session: str = "") -> list[Turn]:
                 current = None  # her own warm-up or an instruction, not the user's turn
                 continue
             source, notes, words = parsed
-            current = Turn(_ts(entry["timestamp"]), session, rendered, words, source, notes)
+            current = Turn(_ts(entry["timestamp"]), session, rendered, words, source, notes, line=number)
             turns.append(current)
         elif kind == "assistant" and current is not None and isinstance(content, list):
             for block in content:
@@ -234,12 +255,35 @@ def read_session(lines: Iterable[str], session: str = "") -> list[Turn]:
     return turns
 
 
-def read_turns(root: Path) -> list[Turn]:
+def read_turns(folder: Path) -> list[Turn]:
+    """Every turn in her brain's own sessions (``evolve.replay.transcripts_dir``: that folder and no other)."""
     turns: list[Turn] = []
-    for path in sorted(glob.glob(str(root / TRANSCRIPTS))):
+    for path in sorted(folder.glob("*.jsonl")):
         with open(path, encoding="utf-8", errors="replace") as f:
-            turns += read_session(f, Path(path).stem)
+            turns += read_session(f, path.stem)
     return sorted(turns, key=lambda t: t.ts)
+
+
+def replayed(row: dict[str, Any]) -> bool:
+    """A line a replay wrote (``evolve.replay.replayed``: its work folder's name is in the line)."""
+    return "octavia-replay-" in str(row.get("cwd") or "")
+
+
+def measured_moments(root: Path) -> tuple[set[tuple[str, int]], set[str]]:
+    """The growth check's held-out moments (``evolve/replay``'s test half): each one's (session, line), and its
+    words. Her capability is measured on these, so nothing may learn from them."""
+    from octavia.evolve.replay import load_cases
+
+    where: set[tuple[str, int]] = set()
+    said: set[str] = set()
+    for case in load_cases(root / REPLAY_CASES):
+        if case.half != "test":
+            continue
+        if case.file and case.line >= 0:
+            where.add((Path(case.file).stem, case.line))
+        if words := _words(case.words):
+            said.add(words)
+    return where, said
 
 
 def sources(root: Path) -> dict[str, list[tuple[float, str]]]:
@@ -359,6 +403,8 @@ def examples(
                 after=after,
                 claude_tools=[c["name"] for s in turn.steps for c in s],
                 reply=" ".join(turn.reply.split())[: _REPLY_CHARS * 2],
+                session=turn.session,
+                line=turn.line,
             )
         )
     return out, dropped
@@ -371,14 +417,36 @@ def _without_claude_notes(turn: Turn) -> str:
     return "[" + "; ".join(pieces) + "]\n" + words
 
 
-def split(rows: list[Example], held_share: float, seed: int = 0) -> tuple[list[Example], list[Example]]:
-    """(train, held out): the newest ``held_share`` of the turns the router asks it about are held out, and no
-    training turn has the same words as one of them. Gated turns only ever train."""
+def split(
+    rows: list[Example],
+    held_share: float,
+    seed: int = 0,
+    measured: tuple[set[tuple[str, int]], set[str]] = (set(), set()),
+    left_out: Counter[str] | None = None,
+) -> tuple[list[Example], list[Example]]:
+    """(train, held out): the newest ``held_share`` of the turns the router asks it about are held out. A turn
+    trains only when it's older than every held-out turn (so none is in its history either), has none of their
+    words, and isn't one of the ``measured`` moments or worded like one (``measured_moments``). Gated turns only
+    ever train. ``left_out`` counts what was dropped, by why."""
+    left_out = left_out if left_out is not None else Counter()
     asked = sorted((r for r in rows if r.gate is None), key=lambda r: r.ts)
-    held = asked[len(asked) - round(len(asked) * held_share) :]
+    held = asked[len(asked) - round(len(asked) * held_share) :] if held_share > 0 else []
     words = {_words(r.user) for r in held}
     held_ids = {r.id for r in held}
-    train = [r for r in rows if r.id not in held_ids and _words(r.user) not in words]
+    cutoff = min((r.ts for r in held), default=float("inf"))
+    where, said = measured
+    train = []
+    for row in rows:
+        if row.id in held_ids:
+            continue
+        if row.ts >= cutoff:
+            left_out["as new as the held-out turns"] += 1
+        elif _words(row.user) in words:
+            left_out["same words as a held-out turn"] += 1
+        elif (row.session, row.line) in where or _words(row.user) in said:
+            left_out["one of the growth check's held-out moments"] += 1
+        else:
+            train.append(row)
     random.Random(seed).shuffle(train)
     return train, held
 
@@ -414,8 +482,13 @@ def build(root: Path, out: Path, held_share: float = 0.35) -> dict[str, Any]:
     config, prompt, tools, _ = asyncio.run(setup(root))
     allowed = frozenset({*config.local_brain.route_tools, *READ_TOOLS})
     core = FastPath(config.assistant.wake_phrase, config.assistant.name).core
-    rows, dropped = examples(read_turns(root), sources(root), allowed, core, config.local_brain.route_max_words)
-    train, held = split(rows, held_share)
+    from octavia.evolve.replay import transcripts_dir
+
+    turns = read_turns(transcripts_dir(root, config))
+    rows, dropped = examples(turns, sources(root), allowed, core, config.local_brain.route_max_words)
+    left_out: Counter[str] = Counter()
+    measured = measured_moments(root)
+    train, held = split(rows, held_share, measured=measured, left_out=left_out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "setup.json").write_text(json.dumps({"prompt": prompt, "tools": tools}, indent=1), encoding="utf-8")
     for name, part in (("train", train), ("held", held)):
@@ -432,8 +505,75 @@ def build(root: Path, out: Path, held_share: float = 0.35) -> dict[str, Any]:
         "prompt_chars": len(prompt),
         "tools": [t["function"]["name"] for t in tools],
     }
+    summary["left_out_of_training"] = dict(left_out)
+    summary["measured_moments"] = len(measured[0])
     (out / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
+    write_manifest(out, train, held, left_out)
+    if problems := check(out, root):
+        raise SystemExit("The dataset failed its own guard:\n- " + "\n- ".join(problems))
     return summary
+
+
+def word_hash(user: str) -> str:
+    """A turn's words, hashed: what the manifest keeps of each turn (never the words)."""
+    return hashlib.sha256(_words(user).encode()).hexdigest()[:20]
+
+
+def _file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_manifest(out: Path, train: list[Example], held: list[Example], left_out: Counter[str]) -> None:
+    manifest = {
+        "guard": GUARD,
+        "built": datetime.now().isoformat(timespec="seconds"),
+        "newest_train_ts": max((r.ts for r in train), default=None),
+        "oldest_held_ts": min((r.ts for r in held), default=None),
+        "left_out_of_training": dict(left_out),
+        "files": {name: _file_hash(out / name) for name in ("train.jsonl", "held.jsonl")},
+        "train": sorted({word_hash(r.user) for r in train}),
+        "held": sorted({word_hash(r.user) for r in held}),
+    }
+    (out / MANIFEST).write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+
+
+def check(out: Path, root: Path | None = None) -> list[str]:
+    """What's wrong with the dataset in ``out`` as a thing to train on ([] when nothing is): proven again from the
+    files, not taken from the manifest's word. With ``root``, also against the growth check's held-out moments as
+    they are now (they grow every week)."""
+    problems: list[str] = []
+    try:
+        manifest = json.loads((out / MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [f"there's no {MANIFEST} in {out}: build the dataset again (tune build)"]
+    if manifest.get("guard") != GUARD:
+        problems.append(f"it was built under guard {manifest.get('guard')!r}, not {GUARD}: build it again")
+    for name, digest in (manifest.get("files") or {}).items():
+        if not (out / name).exists() or _file_hash(out / name) != digest:
+            problems.append(f"{name} isn't the file the manifest was written for")
+    try:
+        train, held = load(out / "train.jsonl"), load(out / "held.jsonl")
+    except (OSError, ValueError, TypeError) as exc:
+        return [*problems, f"its turns couldn't be read ({exc})"]
+    held_words = {_words(r.user) for r in held}
+    same = sum(1 for r in train if _words(r.user) in held_words)
+    if same:
+        problems.append(f"{same} training turns have the words of a held-out turn")
+    if held and train and max(r.ts for r in train) >= min(r.ts for r in held):
+        late = sum(1 for r in train if r.ts >= min(h.ts for h in held))
+        problems.append(f"{late} training turns are as new as the held-out ones")
+    if shared := {r.id for r in train} & {r.id for r in held}:
+        problems.append(f"{len(shared)} turns are in both sets")
+    if any(not r.session or r.line < 0 for r in train):
+        problems.append("training turns don't say which session and line they're from: built before the guard")
+    if root is not None:
+        where, said = measured_moments(root)
+        hit = sum(1 for r in train if (r.session, r.line) in where or _words(r.user) in said)
+        if hit:
+            problems.append(
+                f"{hit} training turns are held-out moments of the growth check (it has grown: build again)"
+            )
+    return problems
 
 
 def load(path: Path) -> list[Example]:
@@ -606,19 +746,25 @@ def main(argv: Sequence[str] | None = None) -> None:
     b = sub.add_parser("build", help="her turns -> train.jsonl, held.jsonl, setup.json")
     b.add_argument("--out", type=Path, default=OUT)
     b.add_argument("--held", type=float, default=0.35)
+    c = sub.add_parser("check", help="prove the dataset keeps what she's measured on out of what's trained on")
+    c.add_argument("--out", type=Path, default=OUT)
     e = sub.add_parser("eval", help="score a llama-server on the held-out turns")
     e.add_argument("--url", required=True)
     e.add_argument("--label", required=True)
     e.add_argument("--lora", type=float, default=None)
     e.add_argument("--out", type=Path, default=OUT)
     e.add_argument("--set", default="held")
-    for parser in (b, e):
+    for parser in (b, c, e):
         parser.add_argument("--root", type=Path, default=None, help="her checkout (data/, config/local.yaml)")
     a = ap.parse_args(argv)
     root = a.root or find_project_root()
     if a.cmd == "build":
         print(json.dumps(build(root, a.out, a.held), indent=1))
         return
+    if a.cmd == "check":
+        problems = check(a.out, root)
+        print("\n".join(f"- {p}" for p in problems) or f"OK: nothing held out is in training ({a.out}).")
+        raise SystemExit(1 if problems else 0)
     config, prompt, tools, registry = asyncio.run(setup(root))
     saved = json.loads((a.out / "setup.json").read_text(encoding="utf-8"))
     if saved["prompt"] != prompt or saved["tools"] != tools:

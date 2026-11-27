@@ -185,6 +185,43 @@ class CancelObjective(Tool):
         return ToolResult.success(f"Stopped objective #{objective.id} “{objective.title}”; verified work is kept.")
 
 
+class ResumeArgs(ToolArgs):
+    objective: str = Field(description="Number or name.")
+    said: str = Field(
+        default="",
+        max_length=1000,
+        description="What the user said that changes things: that they signed in, where the file is, how to get "
+        "around what stopped it. Their words; empty when they only said to try again.",
+    )
+
+
+class ResumeObjective(Tool):
+    name = "resume_objective"
+    description = (
+        "Take up again an objective that ended short of its goal (unfinished, or stopped because it needed "
+        "something from the user): what's left is planned again from what was done and what went wrong, with what "
+        'the user has said since. For "try that again", "I\'ve signed in now, carry on", "the file\'s in Downloads".'
+    )
+    Args = ResumeArgs
+    risk = RiskLevel.SAFE
+    category = "objectives"
+
+    async def run(self, args: ResumeArgs, ctx: ToolContext) -> ToolResult:
+        runner = _runner(ctx)
+        objective = runner.find(args.objective) if runner else None
+        if runner is None or objective is None:
+            return ToolResult.error(_UNAVAILABLE if runner is None else _missing(args.objective))
+        try:
+            runner.take_up(objective, args.said)
+        except RuntimeError as exc:
+            return ToolResult.error(f"I didn't take “{objective.title}” up again: {exc}.")
+        return ToolResult.success(
+            f"Objective #{objective.id} “{objective.title}” is under way again: I'm planning what's left from what's "
+            "on the record, and I'll say once when it's over. Tell the user briefly; don't wait for it.",
+            data={"id": objective.id},
+        )
+
+
 class MergeObjectiveWork(Tool):
     name = "merge_objective_work"
     description = (
@@ -236,4 +273,4 @@ class ListProjects(Tool):
         return ToolResult.success("\n".join(p.describe() for p in projects))
 
 
-TOOLS = [StartObjective, ObjectiveStatus, CancelObjective, MergeObjectiveWork, ListProjects]
+TOOLS = [StartObjective, ObjectiveStatus, CancelObjective, ResumeObjective, MergeObjectiveWork, ListProjects]

@@ -232,19 +232,20 @@ def task_items(tasks: Iterable[Any], kind: str, prefix: str, now: float) -> list
 def objective_items(objectives: Iterable[Any]) -> list[Item]:
     out = []
     for o in objectives:
-        total = len(o.steps)
-        verified = sum(1 for s in o.steps if s.status == "verified")
+        steps = [s for s in o.steps if s.status != "replaced"]  # the plan as it stands (``Objective.live_steps``)
+        total = len(steps)
+        verified = sum(1 for s in steps if s.status == "verified")
         progress = verified / total if total else None
         detail = ""
         if o.status == "planning":
             state, detail = "planning", "making a plan"
         elif o.open:
-            current = next((s for s in o.steps if s.status in ("running", "checking")), None)
+            current = next((s for s in steps if s.status in ("running", "checking")), None)
             state = "waiting" if o.waiting and current is None else "working"
             if o.waiting and current is None:
                 detail = plain(o.waiting, 120)
             elif current is not None:
-                number = o.steps.index(current) + 1
+                number = steps.index(current) + 1
                 what = "checking" if current.status == "checking" else plain(current.activity, 60) or "working"
                 detail = f"step {number} of {total}: {plain(current.title, 60)} · {what}"
             else:
@@ -253,6 +254,8 @@ def objective_items(objectives: Iterable[Any]) -> list[Item]:
             state = o.status
             if o.status in ("failed",) and o.error:
                 detail = plain(o.error, 140)
+            elif o.status == "blocked" and getattr(o, "blocked_on", ""):
+                detail = "needs you: " + plain(o.blocked_on, 120)
             elif total:
                 detail = f"{verified} of {total} steps verified"
         title = o.title or o.goal

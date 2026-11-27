@@ -339,7 +339,7 @@ class ProactiveService:
             steps = objective.steps
             item.files = [s.file for s in steps if s.status == VERIFIED and s.file]
             item.evidence = " ".join(" ".join(s.evidence.split())[:200] for s in steps if s.status == VERIFIED)[:400]
-            if objective.status == DONE and steps and all(s.status == VERIFIED for s in steps):
+            if objective.status == DONE and steps and all(s.status == VERIFIED for s in objective.live_steps):
                 item.status = READY
                 if any(s.kind == CODE for s in steps) and objective.code_to_merge:
                     item.branch = objective.branch
@@ -348,8 +348,10 @@ class ProactiveService:
                 item.problem = objective.error or ("cancelled" if objective.status == OBJECTIVE_CANCELLED else "")
             else:
                 item.status = UNVERIFIED
-                failed = next((s for s in steps if s.status != VERIFIED and s.problem), None)
-                item.problem = failed.problem if failed else "it didn't pass its check"
+                unresolved = [s for s in [*objective.live_steps, *steps] if s.status != VERIFIED and s.problem]
+                item.problem = unresolved[0].problem if unresolved else "it didn't pass its check"
+                if objective.blocked_on:  # what would let it go on, said in the morning's handoff
+                    item.problem = f"it needs you: {objective.blocked_on}"
             changed = True
         if changed:
             self.store.save()

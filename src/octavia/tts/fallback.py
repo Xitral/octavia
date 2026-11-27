@@ -97,6 +97,7 @@ class FallbackTTS(TTSProvider):
         self.name = primary.name
         self.format = primary.format
         self.allowed_tags = getattr(primary, "allowed_tags", frozenset())
+        self.paces = bool(getattr(primary, "paces", False))
         self.pause_tags = getattr(primary, "pause_tags", frozenset())
         self.inline_tags = getattr(primary, "inline_tags", frozenset())
         self._down_until = 0.0  # monotonic time until which the backup speaks everything
@@ -188,11 +189,17 @@ class FallbackTTS(TTSProvider):
         return self._picked().cacheable()
 
     # -- speaking ------------------------------------------------------------------
-    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+    def _main(self, text: str, pace: float) -> AsyncIterator[bytes]:
+        """The main voice's stream, at ``pace`` when it takes one (``tts/rhythm.py``)."""
+        if pace != 1.0 and getattr(self.primary, "paces", False):
+            return self.primary.synthesize(text, pace=pace)  # type: ignore[call-arg]
+        return self.primary.synthesize(text)
+
+    async def synthesize(self, text: str, pace: float = 1.0) -> AsyncIterator[bytes]:
         if self.backup is None or self.only == ONLY_MAIN:
             for attempt in range(2):
                 try:
-                    async with contextlib.aclosing(self.primary.synthesize(text)) as stream:
+                    async with contextlib.aclosing(self._main(text, pace)) as stream:
                         async for chunk in stream:
                             if chunk == STARTED:
                                 continue
@@ -214,17 +221,17 @@ class FallbackTTS(TTSProvider):
         if time.monotonic() - self._last_said > REPLY_GAP_S:
             self._reply_on_backup = None  # a new reply: the main voice gets its chance again
         try:
-            async with contextlib.aclosing(self._speak(text)) as stream:
+            async with contextlib.aclosing(self._speak(text, pace)) as stream:
                 async for chunk in stream:
                     yield chunk
         finally:
             self._last_said = time.monotonic()
 
-    async def _speak(self, text: str) -> AsyncIterator[bytes]:
+    async def _speak(self, text: str, pace: float = 1.0) -> AsyncIterator[bytes]:
         if not self.on_backup:
             heard = False
             try:
-                stream = self.primary.synthesize(text)
+                stream = self._main(text, pace)
                 handed_on = False  # the stream went to ``_learn_why``, which closes it
                 try:
                     # A voice that makes one sentence at a time says STARTED when this one's turn comes: until then

@@ -29,7 +29,7 @@ import contextlib
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -50,8 +50,10 @@ from octavia.core.events import (
     SpeechSegmentMaking,
     SpeechSegmentStarted,
 )
+from octavia.tts import cue_placer, rhythm
 from octavia.tts.base import TTSProvider
 from octavia.tts.chunker import SentenceChunker
+from octavia.tts.cue_placer import CuePlacer
 from octavia.tts.shown import Spoken, as_mark
 
 log = logging.getLogger(__name__)
@@ -60,6 +62,10 @@ _SENTENCE_END = re.compile(r"[.!?…][\"')\]”’]*\s*$")
 
 # Audio gathered before a segment starts from silence: enough to ride out a chunk arriving late, short enough
 # not to be heard as a delay.
+# A sentence's placed cues are waited for only while the audio ahead of it can cover the wait and the voice's first
+# audio (Fish over HTTP, Low: 0.6 to 1.0 s), and never longer than this. Later than that it's said as written.
+PLACEMENT_LEAD_S = 1.2
+PLACEMENT_MAX_WAIT_S = 2.0
 START_CUSHION_S = 0.15
 # Pieces of text this long or longer run dry mid-sentence whenever Fish is slower than real time: its audio for a
 # piece comes in growing chunks, the last ones seconds apart (measured 2026-10-25: 7 pauses at 220, 2 at 40).
@@ -95,6 +101,9 @@ class SpeechOutcome:
         return " ".join(as_mark(getattr(s, "shown", None) or "", str(s)) for s in self.spoken)
 
 
+_NO_AUDIO = np.zeros(0, dtype=np.float32)
+
+
 def _nothing() -> None:
     """A speaker mark that only marks a place (the end of a ring-out)."""
 
@@ -115,7 +124,7 @@ class _Synthesis:
     A failure is kept and raised where the audio is read, so it surfaces in the segment's turn, as before.
     """
 
-    def __init__(self, tts: TTSProvider, text: str) -> None:
+    def __init__(self, tts: TTSProvider, text: str | Awaitable[str], paced: bool = False) -> None:
         self.sample_rate = tts.format.sample_rate
         # How fast the audio came: seconds of it after the first piece, over the time from the first piece to the
         # last (the first piece arrives at the clock's start, so counting it would flatter a slow voice).
@@ -124,14 +133,20 @@ class _Synthesis:
         self._received = False
         self._chunks: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._error: Exception | None = None
-        self._task = asyncio.create_task(self._fetch(tts, text), name="speech-synthesis")
+        self.pace = 1.0  # the speed it was asked at (``tts/rhythm.py``)
+        self._task = asyncio.create_task(self._fetch(tts, text, paced), name="speech-synthesis")
 
-    async def _fetch(self, tts: TTSProvider, text: str) -> None:
+    async def _fetch(self, tts: TTSProvider, text: str | Awaitable[str], paced: bool = False) -> None:
         loop = asyncio.get_running_loop()
         first_at = 0.0
         try:
+            if not isinstance(text, str):
+                text = await text  # its cues, placed in time or not (``SpeechStream._voiced_text``)
+            pace = rhythm.pace_for(text) if paced and getattr(tts, "paces", False) else 1.0
+            self.pace = pace
             # aclosing: a cancelled segment must release its TTS connection right away.
-            async with contextlib.aclosing(tts.synthesize(text)) as stream:
+            source = tts.synthesize(text, pace=pace) if pace != 1.0 else tts.synthesize(text)  # type: ignore[call-arg]
+            async with contextlib.aclosing(source) as stream:
                 async for pcm in stream:
                     if not self._received:
                         self._received, first_at = True, loop.time()
@@ -195,6 +210,16 @@ class SpeechStream:
         self.underruns = 0  # times the speaker ran dry mid-sentence while this stream played
         self.underrun_s = 0.0  # ...and for how long, in all
         self.stalled_s = 0.0  # how long the event loop was stuck while it played (``core/loop_watch.py``)
+        # Tone cues placed sentence by sentence (``tts/cue_placer.py``): asked as each is queued, by segment index.
+        self._placements: dict[int, asyncio.Task[str | None]] = {}
+        self._audio_ends_at = 0.0  # ``time.monotonic()`` when what's queued for the speaker will have played
+        self._last_said: str | None = None  # the last piece queued for the speaker (its ending sets the next pause)
+        self._voiced_tts = 0  # sentences queued for the voice so far: the first is never placed (said into silence)
+        self._last_tone: str | None = None  # the tone the sentence said last opened with
+        self._cues_spent: dict[str, int] = {}  # cues placed in this reply so far, by kind (``cue_placer.PER_REPLY``)
+        self._voiced: dict[int, str] = {}  # what the voice was given, by segment index, where its cues were placed
+        # placements used / back too late / words changed (not taken) / left plain on purpose
+        self.cues = {"placed": 0, "late": 0, "refused": 0, "plain": 0}
 
     # -- feeding -------------------------------------------------------------
     def feed(self, delta: str) -> None:
@@ -292,9 +317,75 @@ class SpeechStream:
         self._queue.put_nowait(None)
 
     def _push(self, segment: str, audio: np.ndarray | None = None, voiced: bool = True) -> None:
+        if audio is None and voiced:
+            self._ask_placement(len(self._segments), str(segment))
         self._segments.append(segment)
         self._idle.clear()
         self._queue.put_nowait((segment, audio, voiced))
+
+    def _ask_placement(self, index: int, text: str) -> None:
+        """Ask for this sentence's cues now, while what's before it plays (``tts/cue_placer.py``)."""
+        placer = self._out.cue_placer
+        first = self._voiced_tts == 0
+        self._voiced_tts += 1
+        if first or placer is None or not placer.ready or not getattr(self._out.tts, "allowed_tags", None):
+            return
+        # The reply so far as she says it, its placed cues included, so the next placement varies from them.
+        start = max(0, index - 6)
+        before = [self._voiced.get(i, str(s)) for i, s in enumerate(self._segments[start:index], start)]
+        self._placements[index] = asyncio.create_task(placer.place(text, before), name="cue-placement")
+
+    async def _voiced_text(self, index: int, text: str) -> str:
+        """What the voice is given for segment ``index``: its placed cues if they're back in time, else as written.
+        In time: before the audio queued ahead of it runs down to the voice's first-audio time."""
+        task = self._placements.pop(index, None)
+        if task is None:
+            return text
+        slack = self._out.sink.pending_seconds() - PLACEMENT_LEAD_S
+        try:
+            placed = await asyncio.wait_for(asyncio.shield(task), min(max(0.0, slack), PLACEMENT_MAX_WAIT_S))
+        except TimeoutError:
+            task.cancel()
+            self.cues["late"] += 1
+            return text
+        except Exception:
+            self.cues["refused"] += 1
+            return text
+        final = cue_placer.accept(text, placed, self._last_tone, self._cues_spent)
+        self._voiced[index] = final
+        if placed is None:
+            self.cues["late"] += 1  # failed or not connected: no better than late
+        elif cue_placer.words(placed) != cue_placer.words(text):
+            self.cues["refused"] += 1
+        elif final == text:
+            self.cues["plain"] += 1  # left as it was: a plain sentence
+        else:
+            self.cues["placed"] += 1
+        self._last_tone = cue_placer.closing_tone(final)
+        return final
+
+    def _queued_audio(self, samples: int, said: str) -> None:
+        """Audio just went to the speaker: when it'll have played, and what was said (the next pause follows it)."""
+        now = time.monotonic()
+        self._audio_ends_at = max(now, self._audio_ends_at) + samples / self._out.sink.sample_rate
+        self._last_said = said
+
+    def _pause_wanted(self) -> np.ndarray:
+        """Silence to put before a sentence's first audio: what the rhythm wants after the one before
+        (``rhythm.pause_before``), less what's already there (the voice's own trailing silence, about
+        ``rhythm.VOICE_TAIL_S``, and any wait for this sentence). Nothing before her first words."""
+        if not self._out.rhythm or self._last_said is None:
+            return _NO_AUDIO
+        waited = max(0.0, time.monotonic() - self._audio_ends_at)
+        extra = rhythm.pause_before(self._last_said) - rhythm.VOICE_TAIL_S - waited
+        if extra <= 0.01:
+            return _NO_AUDIO
+        return np.zeros(int(extra * self._out.sink.sample_rate), dtype=np.float32)
+
+    def _drop_placements(self) -> None:
+        for task in self._placements.values():
+            task.cancel()
+        self._placements.clear()
 
     # -- control -------------------------------------------------------------
     def cancel(self) -> None:
@@ -303,6 +394,7 @@ class SpeechStream:
         self._cancelled = True
         self._out.sink.clear()
         self._worker.cancel()
+        self._drop_placements()
 
     def cut_short(self) -> None:
         """Stop what's playing and drop what's queued, but keep the stream for what's fed next: a question the user
@@ -312,6 +404,7 @@ class SpeechStream:
         self._generation += 1
         self._worker.cancel()
         self._out.sink.clear()
+        self._drop_placements()
         while not self._queue.empty():
             self._queue.get_nowait()
         if self._closed:
@@ -415,7 +508,7 @@ class SpeechStream:
                 return
             held = item
             if item[1] is None and out.tts is not None:
-                ahead = _Synthesis(out.tts, item[0])
+                ahead = _Synthesis(out.tts, self._voiced_text(index + 1, str(item[0])), out.rhythm)
                 fetched.append(ahead)
 
         try:
@@ -436,6 +529,7 @@ class SpeechStream:
                     if voiced:
                         out.sink.mark(lambda i=index, s=segment: self._on_segment_started(i, s))
                     out.sink.enqueue(prepared)
+                    self._queued_audio(prepared.size, str(segment))
                     self._audible = index + 1
                     if voiced:
                         self._audio_made(index, segment, [prepared])
@@ -443,7 +537,7 @@ class SpeechStream:
                     if out.tts is None:
                         raise RuntimeError("no TTS provider configured")
                     if ahead is None:
-                        fetched.append(ahead := _Synthesis(out.tts, segment))
+                        fetched.append(ahead := _Synthesis(out.tts, self._voiced_text(index, str(segment)), out.rhythm))
                     synthesis, ahead = ahead, None
                     if out.effect != effect_name:  # switched mid-reply ("use your radio voice" as a tool): from here
                         ring_out()
@@ -477,6 +571,15 @@ class SpeechStream:
             for unfinished in (synthesis, ahead):
                 if unfinished is not None:
                     unfinished.cancel()  # releases the TTS connection of a segment that was cut off
+            if generation == self._generation and any(self.cues.values()):
+                log.info(
+                    "Tone cues placed in %d sentence(s) of this reply (%d left plain, %d came back too late, %d changed"
+                    " the words and weren't taken)",
+                    self.cues["placed"],
+                    self.cues["plain"],
+                    self.cues["late"],
+                    self.cues["refused"],
+                )
             try:
                 self._log_gaps(underruns, device_underruns, fetched, watch, stalls, dry_s)
             except Exception:  # a log line must never keep the turn from ending
@@ -516,11 +619,15 @@ class SpeechStream:
             nonlocal first_chunk, samples
             samples += audio.size
             if first_chunk:
+                pause = self._pause_wanted()
+                if pause.size:
+                    out.sink.enqueue(pause)  # before the marks: the sentence starts when her voice does
                 if not self._started.is_set():
                     out.sink.mark(self._on_first_audio)
                 out.sink.mark(lambda i=index, s=segment: self._on_segment_started(i, s))
             first_chunk = False
             out.sink.enqueue(audio)
+            self._queued_audio(audio.size, str(segment))
             self._audible = index + 1
 
         async with contextlib.aclosing(synthesis.chunks()) as audio_chunks:
@@ -646,6 +753,8 @@ class SpeechOutput:
         self.volume = volume  # read for every chunk, so a change (the voice_volume tool) is heard right away
         self.effect = voice_effects.OFF  # her voice effect (``tts.voice_effect``): read as each reply starts
         self.current: SpeechStream | None = None
+        self.rhythm = False  # pauses by punctuation and a pace per sentence (``tts.rhythm``, set by the app)
+        self.cue_placer: CuePlacer | None = None  # places her tone cues sentence by sentence (set by the app)
         self.last_start: str | None = None  # the interjection her last reply opened with ("oh"; "" for none)
 
     def begin(self) -> SpeechStream:

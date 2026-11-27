@@ -169,6 +169,8 @@ HOOKED = frozenset(
         "conversation.backchannel",
         "audio.earcon_volume",
         "audio.sound_pack",
+        "audio.directional",  # the speaker's panner (``audio/spatial.py``)
+        "audio.directional_width",
         "wake.second_chance",
         "wake.second_chance_max_s",
         "vad.end_silence_ms",

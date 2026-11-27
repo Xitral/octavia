@@ -41,6 +41,7 @@ from octavia.core.claims import (
     _QUOTED,
     _READS,
     _REPORTED,
+    READ_VERBS,
     Act,
     Claim,
     claims_of,
@@ -75,7 +76,7 @@ _EARLIER = re.compile(
     r"\b(?:already|earlier|ago|this morning|last (?:time|week|night)|you're right|you were right|my bad|my mistake)\b",
     re.IGNORECASE,
 )
-_READ_VERBS = frozenset({"read", "checked", "looked"})
+_READ_VERBS = READ_VERBS
 
 DIDNT_WORK = "Actually, that didn't go through."
 WAIT_FOR_CALL_S = 2.5  # a general claim waits this long for a call to start (her calls came 1.35 s median, 2.4 s p90
@@ -138,6 +139,9 @@ class Kind:
     note: str = ""
     # Goes out as written when no call has started ``WAIT_FOR_CALL_S`` after it.
     waits_for_call: bool = False
+    # Its line is said once lately (``ClaimHold``'s ``told``): for a line about how things are ("the panel didn't come
+    # up"), not one correcting what she just claimed ("that didn't go through"), which must always follow its claim.
+    said_once: bool = False
 
 
 def _bears_out_action(held: Held, act: Act) -> bool:
@@ -180,7 +184,7 @@ ACTION = Kind(
     waits_for_call=True,
     note=(
         'in your last reply you said "{said}" before the call that would do it, and every call you made after it '
-        "failed, so the user heard \"{heard}\" after it. Don't say it's done until a call of yours comes back done; if "
+        "failed, so the user heard {heard} after it. Don't say it's done until a call of yours comes back done; if "
         "it matters, try again or tell them plainly what went wrong"
     ),
 )
@@ -201,10 +205,12 @@ class ClaimHold:
         earlier: Callable[[], Sequence[Act]] = lambda: (),
         flush: Callable[[], None] = lambda: None,
         clock: Callable[[], float] = time.monotonic,
+        told: Callable[[str], bool] = lambda line: False,
     ) -> None:
         self._feed = feed
         self._flush = flush  # what's gone out is a whole thing to say (the voice's ``flush``)
         self._clock = clock
+        self._told = told  # whether she's said a line already, lately: it isn't said again (only her brain is told)
         self._kinds = tuple(kinds)
         self._panels_up = panels_up
         self._earlier = earlier
@@ -214,6 +220,8 @@ class ClaimHold:
         self.dropped: list[str] = []  # claims never borne out and not said (``finish``)
         self.notes: list[str] = []  # for her next turn, about what was taken back (``Kind.note``)
         self.added: list[str] = []  # what she said instead or besides
+        self.repeated: list[str] = []  # lines not said again (``told``)
+        self.once: list[str] = []  # the lines added that are said only once lately (``Kind.said_once``)
         self.borne_late = 0  # claims held, then borne out by a call that came back after they were written
 
     @property
@@ -270,6 +278,7 @@ class ClaimHold:
             return ""
         said: list[str] = []
         lines: list[tuple[str, Kind]] = []
+        noted: list[tuple[str, str, str]] = []
         for sentence, held in self._held:
             if held is None or held.borne:
                 said.append(sentence)
@@ -283,12 +292,23 @@ class ClaimHold:
             else:
                 self.dropped.append(sentence)
             if held.kind.note and line:
-                self.notes.append(held.kind.note.format(said=sentence.strip(), heard=line))
+                noted.append((held.kind.note, sentence.strip(), line))
             if line and all(line != said_line for said_line, _ in lines):
                 lines.append((line, held.kind))
         self._held = []
         named = {kind.name for _, kind in lines}
         self.added = [line for line, kind in lines if not named.intersection(kind.covered_by)]
+        # Said lately already: once is enough out loud ("the panel didn't come up" after every reply was nagging,
+        # 2026-11-23); her brain is still told, so it stops saying what isn't so.
+        once = {line for line, kind in lines if kind.said_once}
+        self.once = [line for line in self.added if line in once]
+        self.repeated = [line for line in self.once if self._guard(self._told, False, line)]
+        self.added = [line for line in self.added if line not in self.repeated]
+        for note, sentence, line in noted:
+            heard = (
+                f'"{line}"' if line in self.added else "nothing about it (you'd said that already, so it was left out)"
+            )
+            self.notes.append(note.format(said=sentence, heard=heard))
         out = "".join(said).strip()
         added = " ".join(self.added)
         if out or added:

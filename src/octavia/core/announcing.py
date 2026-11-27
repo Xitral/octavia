@@ -14,6 +14,9 @@ from octavia.core.approvals import _MIC_SILENT
 from octavia.core.chat import SOURCE as _WINDOW
 from octavia.core.chat import ChatLink
 from octavia.core.events import AnnouncementStarted, AssistantState, Notice
+from octavia.core.focus import CHECK_S as _FOCUS_CHECK_S
+from octavia.core.focus import QUESTION_S as _QUESTION_S
+from octavia.core.focus import asks_for_held, held_note, thinking_over
 from octavia.core.hush import asks_for_hush, keeps_hush
 from octavia.core.stopping import StopKind, holds, stop_kind
 from octavia.core.turn_types import (
@@ -80,6 +83,8 @@ class AnnouncingMixin:
             and self._announcements.empty()
             and not self._gating
             and not self._hushed_lines
+            # held for focus: new code waits for it rather than lose them (a restart they ask for doesn't)
+            and not self._focus_lines
         )
 
     @property
@@ -126,9 +131,10 @@ class AnnouncingMixin:
         """
         full = full if full and full != text else None
         line = Line(text=full or text, source=source, kind=kind, urgent=urgent, facts=facts)
+        unasked = _unasked(line)
 
         def say() -> None:
-            self._announce_now(text, note, listen, cue, offer, relay, full)
+            self._announce_now(text, note, listen, cue, offer, relay, full, unasked=unasked)
 
         def reword(why: str) -> None:
             self._say_reworded(line, note, cue, relay, why)
@@ -144,7 +150,11 @@ class AnnouncingMixin:
         offer: Offer | None,
         relay: bool,
         full: str | None,
+        *,
+        unasked: bool = False,
     ) -> None:
+        if offer is not None or questions_in([text]):
+            unasked = False  # it offers or asks something: a short cut-in may well be the answer
         if relay and self.relay is not None:
             try:
                 self.relay(full or text, cue)
@@ -155,10 +165,12 @@ class AnnouncingMixin:
             self.events.emit(Notice(source="APP", message=full or text))
             self._remember_announcement(full or text, note, offer)
             return
-        self._enqueue(Announcement(text=text, note=note, listen=listen, cue=cue, offer=offer, full=full))
+        self._enqueue(
+            Announcement(text=text, note=note, listen=listen, cue=cue, offer=offer, full=full, unasked=unasked)
+        )
 
     def run_in_background(
-        self, text: str, note: str | None = None, speak: bool = True, cue: str | None = None
+        self, text: str, note: str | None = None, speak: bool = True, cue: str | None = None, *, unasked: bool = False
     ) -> asyncio.Future[TurnResult]:
         """Run ``text`` through the brain as a turn of its own (a scheduled job) once nobody is talking with her.
 
@@ -166,9 +178,13 @@ class AnnouncingMixin:
         the reply is spoken (unless ``speak`` is False: then only the returned result has it), the user can cut in,
         and a follow-up window opens after it. It isn't the user's own turn, so every risky call is asked (see
         ``unattended``). ``cue``: what kind of remark of hers it is ("morning"), for the avatar as it starts, as an
-        announcement's. The future resolves with the turn's result; it fails when the voice loop isn't running.
+        announcement's. ``unasked``: it's hers, nobody asked for it (``tell_in_own_words`` of her own news or idea),
+        which a stop said over it weighs (``core/cut_off.py``). The future resolves with the turn's result; it fails
+        when the voice loop isn't running.
         """
-        return self._queue_turn(BackgroundTurn(text=text, note=note, speak=speak, result=_new_future(), cue=cue))
+        return self._queue_turn(
+            BackgroundTurn(text=text, note=note, speak=speak, result=_new_future(), cue=cue, unasked=unasked)
+        )
 
     def tell_in_own_words(
         self,
@@ -192,23 +208,33 @@ class AnnouncingMixin:
         It passes the unprompted gate first, as ``announce`` does (``kind`` and the rest: see there; ``facts``
         defaults to ``note``). Call on the event loop thread."""
         line = Line(text=fallback, source=source, kind=kind, urgent=urgent, facts=facts or note[:_FACTS_CHARS])
+        unasked = _unasked(line)
 
         def say() -> None:
-            self._tell_now(turn, note, fallback, fallback_note, cue, relay)
+            self._tell_now(turn, note, fallback, fallback_note, cue, relay, unasked=unasked)
 
         def reword(why: str) -> None:
-            self._tell_now(turn, f"{note}\n{_LEAVE_OUT.format(why=why)}", fallback, fallback_note, cue, relay)
+            reworded = f"{note}\n{_LEAVE_OUT.format(why=why)}"
+            self._tell_now(turn, reworded, fallback, fallback_note, cue, relay, unasked=unasked)
 
         self._through_gate(line, say, reword)
 
     def _tell_now(
-        self, turn: str, note: str, fallback: str, fallback_note: str | None, cue: str | None, relay: bool
+        self,
+        turn: str,
+        note: str,
+        fallback: str,
+        fallback_note: str | None,
+        cue: str | None,
+        relay: bool,
+        *,
+        unasked: bool = False,
     ) -> None:
-        def canned() -> None:
-            self._announce_now(fallback, fallback_note, True, cue, None, relay, None)  # already past the gate
+        def canned() -> None:  # already past the gate
+            self._announce_now(fallback, fallback_note, True, cue, None, relay, None, unasked=unasked)
 
         try:
-            pending = self.run_in_background(turn, note, cue=cue)
+            pending = self.run_in_background(turn, note, cue=cue, unasked=unasked)
         except Exception:
             log.warning("Couldn't give her %r as a turn of her own", turn, exc_info=True)
             canned()
@@ -239,8 +265,9 @@ class AnnouncingMixin:
         what the judge named (``reword``: only ever an asked line), or held. What needs no model is decided at once;
         the rest is judged in the background and said when it's through (counted in ``announcing`` meanwhile, so a
         restart waits for it). Without a gate, or off the event loop, it's said as it comes. While the user wants
-        her quiet (``_hush``) her own lines wait instead, and go through all this once that's over."""
-        if self._held_for_hush(line, say, reword):
+        her quiet (``_hush``) her own lines wait instead, and go through all this once that's over; so do they while
+        the user is focused with her (``focused``: studying, thinking over her question)."""
+        if self._held_for_hush(line, say, reword) or self._held_for_focus(line, say, reword):
             return
         gate = self.unprompted
         if gate is None:
@@ -298,6 +325,10 @@ class AnnouncingMixin:
         if asks_for_hush(core):
             self._hush()
         elif self._hushed_until is not None and not keeps_hush(core) and stop_kind(core) is None:
+            if asks_for_held(core):  # "okay, what were you going to say?": the turn tells them (``held_for_turn``)
+                self._focus_lines.extend(self._hushed_lines)
+                self._hushed_lines = []
+                self._watch_focus()
             self._end_hush("the user talked to me again")
 
     def _hush(self) -> None:
@@ -335,6 +366,102 @@ class AnnouncingMixin:
         self._hushed_lines.append((line, say, reword))
         log.info("Holding %s (%s) while told to be quiet: %r", line.source, line.kind, line.text[:160])
         return True
+
+    def focused(self) -> str:
+        """What the user is in the middle of with her, in a few words ("studying Intro to AI", "thinking over my
+        question"), or "" for nothing: her own lines wait meanwhile (``core/focus.py``). A study session running, a
+        question of hers they haven't answered yet (``_QUESTION_S`` at most), or what the app adds
+        (``focus_probes``)."""
+        try:
+            course = self.studying() if self.studying is not None else ""
+        except Exception:
+            log.warning("Couldn't tell whether the user is studying", exc_info=True)
+            course = ""
+        if course:
+            return f"studying {course}"
+        if self._question_open():
+            return "thinking over my question"
+        for probe in list(self.focus_probes):
+            try:
+                why = probe()
+            except Exception:
+                log.warning("A focus probe broke; taking it as no focus", exc_info=True)
+                continue
+            if why:
+                return why
+        return ""
+
+    def _question_open(self) -> bool:
+        """Whether the last thing she put to the user asked them something to think over (not an offer:
+        ``thinking_over``), and they haven't spoken since (what she
+        put to them is cleared when they do: ``_put_to_user``), nor let it sit past ``_QUESTION_S``."""
+        if not self._put_to_user:
+            return False
+        at, text, _ = self._put_to_user[-1]
+        if time.monotonic() - at > _QUESTION_S or not thinking_over(questions_in([text])):
+            return False
+        # Asked in a reply of hers, in the conversation (a lesson's question), not by an announcement of her own
+        # ("Want me to pull up the rubric?"): that's no more focus than the announcement was.
+        reply = (self._last_reply() or "").strip()
+        return bool(reply) and (text.strip() in reply or reply in text.strip())
+
+    def _held_for_focus(self, line: Line, say: Callable[[], None], reword: Callable[[str], None]) -> bool:
+        """Whether ``line`` waits while the user is focused (``focused``); it's kept to go through once that's over
+        (``_watch_focus``), or given to the brain when they ask for it (``held_for_turn``)."""
+        if line.kind in (ASKED, REPLY) or line.urgent:
+            return False
+        why = self.focused()
+        if not why:
+            return False
+        self._focus_lines.append((line, say, reword))
+        self._focus_why = why
+        log.info("Holding %s (%s) while the user is %s: %r", line.source, line.kind, why, line.text[:160])
+        self._watch_focus()
+        return True
+
+    def _watch_focus(self) -> None:
+        """Let the lines held for focus through once it's over, checked every ``_FOCUS_CHECK_S``."""
+        if self._focus_task is not None and not self._focus_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # looked at again with the next line held, or taken by the turn that asks for it
+
+        async def watch() -> None:
+            while self._focus_lines:
+                await asyncio.sleep(_FOCUS_CHECK_S)
+                if self._focus_lines and not self.focused():
+                    self._release_focus("the user isn't focused any more")
+
+        self._focus_task = loop.create_task(watch(), name="focus-hold")
+
+    def _release_focus(self, why: str) -> None:
+        held, self._focus_lines = self._focus_lines, []
+        if not held:
+            return
+        log.info("No longer holding what I'd say on my own for focus (%s): %d line(s) waited", why, len(held))
+        for line, say, reword in held:
+            self._through_gate(line, say, reword)  # hushed since, or focused again: it waits again
+
+    def held_for_turn(self, text: str, keep: bool = True) -> str | None:
+        """The note for a turn of the user's (``text``) that asks for what she held back ("any news?", "what were
+        you going to say?"), while lines wait for focus or a hush; None otherwise. With ``keep`` they're taken:
+        told in this turn by the brain, and not said again on their own (the unprompted gate counts them said)."""
+        waiting = [*self._focus_lines, *self._hushed_lines]
+        if not waiting or not asks_for_held(text):
+            return None
+        note = held_note(self._focus_why or "busy with me", [line.text for line, _, _ in waiting])
+        if keep:
+            self._focus_lines, self._hushed_lines = [], []
+            log.info("Told %d held line(s) in the turn that asked for them", len(waiting))
+            if self.unprompted is not None:
+                for line, _, _ in waiting:
+                    try:
+                        self.unprompted.said(line.text, line.source)
+                    except Exception:
+                        log.warning("Couldn't count a held line as said", exc_info=True)
+        return note
 
     def _say_reworded(self, line: Line, note: str | None, cue: str | None, relay: bool, why: str) -> None:
         """An asked line (a reminder) with a part the user waved off or that no longer holds: said by her, in her
@@ -664,6 +791,8 @@ class AnnouncingMixin:
             return
         self._set_state(AssistantState.SPEAKING)
         self.events.emit(AnnouncementStarted(text=item.text, cue=item.cue, full=item.full))
+        self._saying_unasked = item.unasked  # a stop said over it weighs that (``core/cut_off.py``)
+        self._began_talking_at = time.monotonic()
         # Interruptible like a reply: the wake phrase or talk hotkey stops it and starts listening.
         self._interrupt = asyncio.Event()
         self._barge_kind = None
@@ -684,6 +813,7 @@ class AnnouncingMixin:
         finally:
             interrupted.cancel()
             self._announcing = False
+            self._saying_unasked = False
             if self._mode is ListenMode.BARGE:
                 self._mode = ListenMode.OFF
         if self._barge_kind in ("wake", "voice", "hotkey"):
@@ -712,7 +842,11 @@ class AnnouncingMixin:
                 finally:
                     self._remote_busy = None
             else:
-                result = await self._run_turn(item.text, source="scheduled", notes=notes, speak=item.speak)
+                self._saying_unasked = item.unasked
+                try:
+                    result = await self._run_turn(item.text, source="scheduled", notes=notes, speak=item.speak)
+                finally:
+                    self._saying_unasked = False
         except asyncio.CancelledError:
             item.result.cancel()
             raise
@@ -782,3 +916,8 @@ class AnnouncingMixin:
     def _stopped_away(self) -> bool:
         """The texted turn running now has had a texted stop come for it (``stop_from``)."""
         return self._running_away is not None and self._running_away.stop_wanted
+
+
+def _unasked(line: Line) -> bool:
+    """Whether ``line`` is hers and nobody asked for it: her status news or her own idea, not urgent."""
+    return line.kind in (STATUS, INITIATIVE) and not line.urgent

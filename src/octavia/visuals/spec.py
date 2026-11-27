@@ -229,8 +229,26 @@ class InputField(_Part):
         return self
 
 
+def _one_question_schema(schema: dict[str, Any]) -> None:
+    """An input block may be one question given straight (``InputBlock._one_field``), so the call isn't refused
+    before it reaches the panel: 2026-11-23 a show_visual with ``prompt`` and ``choices`` on the block was refused by
+    the schema, and she lost about 20 s retrying through update_visual and a tool lookup while the user waited."""
+    schema["required"] = [r for r in schema.get("required", []) if r != "fields"]
+    schema["anyOf"] = [{"required": ["fields"]}, {"required": ["prompt"]}]  # a question either way, never a blank box
+    props = schema.setdefault("properties", {})
+    props["prompt"] = {"type": "string", "maxLength": 300, "description": "Instead of fields, one question: its words."}
+    props["choices"] = {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1, "maxLength": 60},
+        "description": "...and its buttons.",
+    }
+    props["answer"] = {"type": "string", "maxLength": 60, "description": "...and its right answer (never shown)."}
+
+
 class InputBlock(_Part):
     """Boxes (and choice buttons) the user types into: what they send comes back to you as their own turn."""
+
+    model_config = ConfigDict(json_schema_extra=_one_question_schema)
 
     kind: Literal["input"]
     id: str = Field(default="", pattern=BLOCK_ID, description="Names the block for edits.")

@@ -35,6 +35,10 @@ _TALK = re.compile(
             r"\b(?:you\s+can|go\s+ahead\s+and|feel\s+free\s+to)\s+(?:talk|narrate|explain)\b",
             r"\btell\s+me\s+what\s+you'?re\s+doing\b",
             r"\b(?:keep\s+me\s+(?:posted|updated)|narrate|explain\s+(?:as\s+you\s+go|each\s+step|what\s+you'?re\s+doing))\b",
+            # Missing her voice: "are you gonna talk to me?", "you're not saying anything", "say something" (2026-11-24)
+            r"\b(?:talk|speak)\s+to\s+me\b",
+            r"\bsay\s+something\b",
+            r"\bnot\s+(?:saying|telling\s+me)\s+anything\b",
         )
     ),
     re.IGNORECASE,

@@ -23,7 +23,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from octavia.core.acknowledge import classify
+from octavia.core.acknowledge import classify, thanks_or_praise
 from octavia.core.events import (
     AnnouncementStarted,
     AppContextChanged,
@@ -282,6 +282,8 @@ class Normalizer:
                 )
             ]
         out: list[FuturesEvent] = self._reaction(event.ts, event.text)  # before the request settles the reply
+        if thanks_or_praise(event.text):  # her brain takes thanks now (no preset): the feedback the preset gave
+            out.extend(self._feedback(event.ts, "positive", "thanks"))
         self._last_request = event.text
         self._tuning = tuple(event.tuning)
         words = redact(event.text, 200) if self.keep_request_words else ""

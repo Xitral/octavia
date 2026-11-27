@@ -434,7 +434,8 @@ class SpeakingFinished(Event):
 @dataclass(frozen=True, kw_only=True)
 class Interrupted(Event):
     reason: str
-    # How long the user had been talking over her when her voice stopped (a voice barge-in), when it's known.
+    # How long the user had been talking over her when her voice went quiet (a voice barge-in), when it's known:
+    # the speech that tripped it plus what the speaker's buffer still played.
     after_s: float | None = None
 
 

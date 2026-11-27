@@ -141,7 +141,7 @@ _NOT_SOMEONE = frozenset({"i", "and", "then", "also", "just", "she", "octavia"})
 # breaks may have sent it early") or a check ("Checking whether it went through.").
 _NOT_A_CLAIM = re.compile(
     r"\?|\b(?:if|when|once|unless|would|could|should|might|didn't|did not|couldn't|could not|haven't|have not|"
-    r"wasn't|can't|cannot|not|never|tried|try|failed|wanted|meant|thought|before|earlier|yesterday|last time|"
+    r"wasn't|neither|can't|cannot|not|never|tried|try|failed|wanted|meant|thought|before|earlier|yesterday|last time|"
     r"I'd|every (?:day|week|month|year|time)|each (?:day|week|month|time)|usually|always|"
     r"whether|may|maybe|perhaps|probably|possibly|seems|seemed|looks like|checking|check)\b",
     re.IGNORECASE,
@@ -224,6 +224,29 @@ _WORD = re.compile(r"[a-z0-9]{2,}")
 _COMMON = frozenset({"the", "and", "for", "you", "your", "with", "from", "that", "this", "of", "to", "on", "in", "at",
                      "my", "an", "it", "is", "be", "we", "me", "up", "as", "or", "by"})  # fmt: skip
 
+# A time gone by: "I restarted a minute ago". With no step of hers in the turn at all there's nothing
+# to hold it to, so it's logged and not put to her as something that never happened ("already" and "you're right"
+# stay: "You're right, I've added it now" with nothing done is the claim most worth catching).
+_AGO = re.compile(r"\b(?:ago|earlier|this morning|last (?:time|week|night))\b", re.IGNORECASE)
+# "I read it", "I checked", "I looked": any call of hers that worked is a look at something.
+READ_VERBS = frozenset({"read", "checked", "looked"})
+# Claims held to a tool that does that very thing, by name: what can't be taken back or is one exact step, where a
+# wrong "I did" costs the most or the tool is plain. Every other claim no tool is named for is borne out by the
+# turn's own steps (``_done_by``): the name table can't keep up with her tools (30 of her 39 claims logged "unbacked"
+# to 2026-11-25 were true, done by a tool whose name didn't hold the verb: "I've restarted the lab" by
+# resume_screen_task, "I turned the effect off" by switch_engines; she was then told they never happened, and said
+# so to the user).
+STRICT_VERBS = frozenset(
+    {"installed", "deleted", "removed", "scheduled", "booked", "downloaded", "remembered", "clicked", "typed"}
+)
+# A tool that does something, by how her tools are named: a doing word first ("resume_screen_task", "switch_engines",
+# "run_command", "web_click"). What only reads, looks or reports (canvas_due, garmin_vitals, WebSearch) isn't one,
+# whatever it's called: a claim is never borne out by a tool for want of knowing what the tool does.
+_DOES = re.compile(
+    r"^(?:web_)?(?:start|resume|stop|cancel|restart|shut|switch|run|set|open|close|create|edit|update|delete|save|"
+    r"send|reply|add|install|merge|play|pause|make|remove|connect|disconnect|forget|copy|restore|focus|click|type|"
+    r"press|drag|compose|log|build|reject|undo|enter|pin|hide|propose|correct)(?:_|$)|^media_control$"
+)
 # Sends and the like: on the screen they're held to what confirmed them (``_judge_send``).
 SEND_VERBS = frozenset({"sent", "emailed", "texted", "posted", "submitted"})
 _SUBMITS = frozenset({"submitted"})
@@ -394,7 +417,36 @@ def overnight_claims_in(reply: str) -> list[Claim]:
 def backer(verb: str, tools: list[str]) -> str:
     """The first of ``tools`` (names of tools that succeeded) that can back ``verb``, or ""."""
     words = _BACKERS.get(verb, ())
-    return next((tool for tool in tools if any(word in tool for word in words)), "")
+    return next((tool for tool in tools if any(word in tool.casefold() for word in words)), "")
+
+
+def _done_by(claim: Claim, acts: list[Act]) -> str:
+    """The step of this turn that bears out ``claim`` when no tool is named for its verb, or "".
+
+    A look or a read: any call that worked. Anything else: the turn's last doing step (``_DOES``; not one on the
+    side, a panel or a note, which is about itself), when it worked and no doing step that failed was left failed
+    (the same tool didn't work afterwards): "I've restarted the lab" isn't borne out by a page she opened beside a
+    resume that failed. Never for ``STRICT_VERBS``, sends, or a change said to be on a panel (her panel tools back
+    that, or nothing does)."""
+    now = [a for a in acts if a.turn == 0]
+    if claim.verb in READ_VERBS:
+        return next((a.name for a in reversed(now) if a.ok), "")
+    if claim.verb in STRICT_VERBS or claim.verb in SEND_VERBS or _ON_PANEL.search(claim.sentence):
+        return ""
+    doing = [a for a in now if _DOES.match(a.name) and not _SIDE.match(a.name) and not _PANEL_TOOLS.search(a.name)]
+    if not doing or not doing[-1].ok:
+        return ""
+    for i, act in enumerate(doing):
+        if not act.ok and not any(later.ok and later.name == act.name for later in doing[i + 1 :]):
+            return ""
+    return doing[-1].name
+
+
+def told_of_earlier(claim: Claim) -> bool:
+    """Whether ``claim`` only says something happened a while back, which a turn with no steps can't speak to."""
+    if claim.verb in SEND_VERBS or claim.verb in STRICT_VERBS:
+        return False
+    return bool(_AGO.search(_QUOTED.sub("", claim.sentence)))
 
 
 def sent_outcome(act: Act) -> str:
@@ -487,6 +539,8 @@ def judge(claim: Claim, acts: list[Act]) -> Claim:
             claim.why = "nothing"
         elif not claim.backed_by and backer(claim.verb, [a.name for a in acts if a.turn == 0 and not a.ok]):
             claim.why = "failed"  # "I've recorded it" said before a call that then failed: the call says otherwise
+        elif not claim.backed_by:  # no tool is named for it: what this turn's own steps did
+            claim.backed_by = _done_by(claim, acts)
     return claim
 
 
@@ -677,6 +731,9 @@ class ClaimWatch:
                 said = "; ".join(f'"{c.sentence}"' for c in unbacked_overnight[:2])
                 self.note(_OVERNIGHT_NOTE.format(said=said))
             self._told(turn)
+            # "I restarted a minute ago" in a turn with no step of hers: logged, not put to her (``_AGO``).
+            if not turn.acts:
+                unbacked = [c for c in unbacked if not told_of_earlier(c)]
             if unbacked := [c for c in unbacked if c not in unbacked_overnight]:
                 said = "; ".join(f'"{c.sentence}"' for c in unbacked[:2])
                 self.note(

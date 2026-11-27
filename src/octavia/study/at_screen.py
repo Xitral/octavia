@@ -15,6 +15,8 @@ of hers (``panel_owed``), her next turn is told to put it up first.
 Studying doesn't mean they're at the screen, though: on 2026-11-02 the user said they were in the shower, away from
 it, and the note told her they were at it, so she offered problems on a panel they couldn't see. So what they say
 about being away (``AwayFromScreen``) holds until they say they're back, or type, which only someone there can do.
+On 2026-11-21 "I'm going into the shower" wasn't heard as away (only "in the shower" was), so the note said "at the
+screen" again and she put Bayes' formula on a panel: the ways of saying it cover going to shower, and heading out.
 """
 
 from __future__ import annotations
@@ -51,14 +53,18 @@ AWAY_NOTE = (
 _SCREEN = r"(?:the |my |your )?(?:screen|computer|pc|desk|monitor|laptop|panels?)"
 _AWAY = re.compile(
     rf"\b(?:away from|not at|not in front of|not near|nowhere near|can'?t see|cannot see|can not see) {_SCREEN}\b"
-    r"|\b(?:in|taking|having|getting in(?:to)?) (?:the |a )?(?:shower|bath)\b"
-    r"|\bi'?m (?:not )?(?:stepping|stepped|walking|walked|going) away\b",
+    r"|\b(?:in|into|to|take|taking|have|having|grab|grabbing|getting in(?:to)?) (?:the |a |my )?(?:quick )?"
+    r"(?:shower|bath)\b"
+    r"|\b(?:going to|gonna|about to|need to|have to|got to|gotta|go) (?:go )?(?:shower|bathe)\b"
+    r"|\bi'?m (?:not )?(?:stepping|stepped|walking|walked|going) away\b"
+    r"|\b(?:i'?m|i am) (?:heading|going|stepping|popping|running) out\b(?! of)"
+    r"|\b(?:brb|be right back)\b",
     re.IGNORECASE,
 )
 _BACK = re.compile(
     rf"\b(?:i'?m|i am) (?:now |finally )?(?:back|at {_SCREEN}|in front of {_SCREEN})\b"
     r"|\bback (?:at|to|in front of) " + _SCREEN + r"\b"
-    r"|\bout of the (?:shower|bath)\b",
+    r"|\b(?:out of|back from) (?:the |my )?(?:shower|bath)\b",
     re.IGNORECASE,
 )
 _TYPED = frozenset({"text", "window"})  # typed at the PC: whoever typed it is at the screen

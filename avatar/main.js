@@ -12,6 +12,7 @@ const { AvatarWindow } = require('./lib/window');
 const { Choreographer } = require('./lib/choreography');
 const { Trails } = require('./lib/trail');
 const { Subtitles } = require('./lib/subtitles');
+const { Whereabouts } = require('./lib/where');
 const { startPreview } = require('./lib/preview');
 
 // A prop is a small model; anything bigger is a mistake. Octavia's scan leaves out a bigger file first
@@ -33,6 +34,7 @@ let avatar = null;
 let choreo = null;
 let trails = null;
 let subtitles = null;
+let whereabouts = null; // where she is across the screen, for her voice to come from there
 let ready = false;
 const pending = []; // messages that arrived before the model finished loading
 // What her subtitles hear: lines and their end, her feelings and voice so the words move with her, and her leaving
@@ -76,7 +78,7 @@ function dispatch(msg) {
   choreo.handle(msg);
 }
 
-// Messages from the renderer. Only 'ready', 'hidden' (via the choreographer), 'shutter', 'hover' and 'error' reach Octavia; the
+// Messages from the renderer ('where' comes from main itself: lib/where.js). Only 'ready', 'hidden' (via the choreographer), 'shutter', 'hover' and 'error' reach Octavia; the
 // renderer's reports on its own animations ('zipped-out', 'arrived', 'metrics') are for main alone.
 function onRendererEmit(msg) {
   if (!msg || typeof msg.type !== 'string') return;
@@ -86,6 +88,7 @@ function onRendererEmit(msg) {
     emit({ type: 'ready' });
     pending.splice(0).forEach(dispatch);
     trails.start();
+    whereabouts.start();
     if (args.preview) stopPreview = startPreview(dispatch, { spot: previewSpot });
   } else if (msg.type === 'error') {
     emit({ type: 'error', message: String(msg.message) });
@@ -204,6 +207,11 @@ if (cfg) {
       app.exit(1);
     });
     wc.on('preload-error', (_e, file, err) => emit({ type: 'error', message: `preload failed: ${err.message}` }));
+    whereabouts = new Whereabouts({
+      herRect: () => (avatar.atHome !== false ? avatar.bounds : choreo.bodyBounds()),
+      screen,
+      emit,
+    });
     debug(`config: ${JSON.stringify(cfg)}`);
 
     // Octavia closing our stdin means it is gone, so we go too. The preview has no one on the other end.
@@ -215,6 +223,7 @@ if (cfg) {
   app.on('window-all-closed', () => app.quit());
   app.on('before-quit', () => {
     if (stopPreview) stopPreview();
+    if (whereabouts) whereabouts.stop();
     if (choreo) choreo.close();
     if (trails) trails.destroy();
     if (subtitles) subtitles.destroy();

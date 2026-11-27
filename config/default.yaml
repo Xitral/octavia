@@ -45,6 +45,8 @@ audio:
   working_sound: true          # a soft loop while she thinks or works on your request (see docs/sounds.md)
   done_sound: false            # a rising arpeggio when a request of several steps is done (off: it followed every quiz question)
   headphones: false            # true if you use headphones: enables interrupting by just talking
+  directional: true            # her voice and sounds come from where she is on screen (stereo; best with headphones)
+  directional_width: 0.5       # how far to the side at the screen's edge: 0.5 = the far ear 3 dB down, 1 = one ear only
 
 wake:
   engine: sherpa_kws           # sherpa_kws (any phrase, no training) | openwakeword (custom-trained model) | keyboard (press Enter)
@@ -150,6 +152,7 @@ brain:
 
 tts:
   provider: fish_audio         # fish_audio | local (her cloned voice on this PC, Fish as its backup) | local_only
+  rhythm: true                 # pauses that vary with punctuation, a pace per sentence (quicker short lines, slower stressed ones)
   min_chunk_chars: 40          # text sent to Fish in one go; keep it small: long pieces pause mid-reply when Fish is slow
   fallback: windows            # backup voice when Fish Audio fails: windows (built-in voice) | none (silent)
   windows_voice: ""            # part of a Windows voice's name, e.g. "Zira"; "" = first female English voice
@@ -169,6 +172,7 @@ tts:
     temperature: null
     top_p: null
     expressive_tags: true      # allow tone cues like [excited]
+    place_cues: true           # a quick Haiku session places cues in each sentence after the first, words unchanged
     spare_socket_max_idle_s: 30
     base_url: "https://api.fish.audio"
   local:                       # provider: local = her cloned voice made on this PC (Qwen3-TTS on the GPU), Fish behind it

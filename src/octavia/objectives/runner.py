@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import subprocess
 import time
 from collections.abc import Awaitable, Callable, Iterator
@@ -38,6 +39,7 @@ from octavia.core.text import spoken_summary
 from octavia.evolve.git import Git, GitError, MergeConflictError
 from octavia.objectives import guard, prompts
 from octavia.objectives.models import (
+    BLOCKED,
     CANCELLED,
     CHECKING,
     CODE,
@@ -46,12 +48,16 @@ from octavia.objectives.models import (
     KINDS,
     MAX_ATTEMPTS,
     MAX_INTERRUPTIONS,
+    MAX_REPLANS,
+    MAX_RESUMES,
     MAX_STEPS,
     OBJECTIVE_CANCELLED,
     OBJECTIVE_FAILED,
     PENDING,
     PLANNING,
+    REPLACED,
     RESEARCH,
+    RESUMABLE,
     RUNNING,
     SELF,
     SKIPPED,
@@ -308,16 +314,11 @@ class ObjectiveRunner:
                 if not await self._plan(objective):
                     self._end(objective)
                     return
-            if any(s.kind == CODE for s in objective.steps):
-                project = await self._project(objective)
-                why = await asyncio.to_thread(self._prepare_branch, objective, project, resumed)
-                self._save()
-                if why:
+            if any(s.kind == CODE for s in objective.live_steps):
+                if why := await self._ready_for_code(objective, resumed):
                     objective.status, objective.error = OBJECTIVE_FAILED, why
                     self._end(objective)
                     return
-                if objective.baseline is None:
-                    await self._baseline(objective, project)
             await self._run_steps(objective)
             self._end(objective)
         except asyncio.CancelledError:
@@ -328,10 +329,24 @@ class ObjectiveRunner:
             objective.status, objective.error = OBJECTIVE_FAILED, f"something went wrong in my own code ({exc})"
             self._end(objective)
 
+    async def _ready_for_code(self, objective: Objective, resumed: bool) -> str | None:
+        """The objective's branch and worktree, and the project's checks before any change; why not, otherwise."""
+        project = await self._project(objective)
+        why = await asyncio.to_thread(self._prepare_branch, objective, project, resumed)
+        self._save()
+        if why:
+            return why
+        if objective.baseline is None:
+            await self._baseline(objective, project)
+        return None
+
     async def _run_steps(self, objective: Objective) -> None:
         live = self._live.setdefault(objective.id, _Live())
         while True:
-            self._skip_blocked(objective)
+            # While the rest can still be planned again, a failed step's dependents wait for the new plan.
+            again = self._may_replan(objective)
+            if not again:
+                self._skip_blocked(objective)
             for step in self._ready(objective):
                 if step.id not in live.steps:  # it stays pending until its attempt really starts
                     live.steps[step.id] = asyncio.get_running_loop().create_task(
@@ -340,6 +355,9 @@ class ObjectiveRunner:
             self._save()
             running = [t for t in live.steps.values() if not t.done()]
             if not running:
+                if again and await self._replan(objective):
+                    continue  # new steps took the place of what failed and what waited on it
+                self._skip_blocked(objective)
                 stuck = [s for s in objective.steps if s.status == PENDING]
                 for step in stuck:  # can't happen with a valid plan; never loop on it
                     step.status, step.problem = SKIPPED, "It could never start."
@@ -376,8 +394,11 @@ class ObjectiveRunner:
 
     def _end(self, objective: Objective) -> None:
         if objective.status in (PLANNING, WORKING):
-            ok = objective.steps and all(s.status == VERIFIED for s in objective.steps)
-            objective.status = DONE if ok else UNFINISHED
+            live = objective.live_steps
+            if live and all(s.status == VERIFIED for s in live):
+                objective.status = DONE
+            else:
+                objective.status = BLOCKED if objective.blocked_on else UNFINISHED
         objective.finished = objective.finished or self._clock().isoformat()
         objective.ended_at = objective.ended_at or time.time()
         objective.waiting = ""
@@ -398,6 +419,33 @@ class ObjectiveRunner:
     # ------------------------------------------------------------------ planning
 
     async def _plan(self, objective: Objective) -> bool:
+        now = f"{self._clock():%A %B %d, %Y, %H:%M}"
+        prompt = prompts.plan_prompt(objective.goal, objective.project, now, known=self._known(objective))
+        result, project = await self._planning_session(objective, prompt, prompts.PLAN_SCHEMA, asked=True)
+        if result is None:
+            return False
+        if not result.ok or result.data is None:
+            objective.status = OBJECTIVE_FAILED
+            objective.error = f"I couldn't plan it: {result.error or 'the planner gave no plan'}"
+            return False
+        error = apply_plan(
+            objective,
+            result.data,
+            coding=project is not None and project.has_commits,
+            self_work=self._self_work(objective),
+        )
+        if error:
+            objective.status, objective.error = OBJECTIVE_FAILED, f"I couldn't plan it: {error}"
+            return False
+        objective.status = WORKING
+        self._save()
+        log.info("Objective #%s planned: %d steps", objective.id, len(objective.steps))
+        return True
+
+    async def _planning_session(
+        self, objective: Objective, prompt: str, schema: dict[str, Any], *, asked: bool
+    ) -> tuple[SessionResult | None, Project | None]:
+        """One session of the planner on ``prompt`` (the first plan, or the rest planned again), and the project."""
         project = await self._project(objective)
         own = self.settings.own_root if self.improvements is not None and not objective.project_path else None
         cwd = Path(objective.project_path) if objective.project_path else own or self._scratch("plan", objective.id)
@@ -419,36 +467,163 @@ class ObjectiveRunner:
             self.settings.planner,
             objective,
             cwd=cwd,
-            prompt=prompts.plan_prompt(objective.goal, objective.project, f"{self._clock():%A %B %d, %Y, %H:%M}"),
+            prompt=prompt,
             system=prompts.planner_system(
                 self.settings.name, self.settings.user, note, self_work=self._self_work(objective)
             ),
             tools=(*guard.READ_TOOLS, *(guard.WEB_TOOLS if web else ())),
             check=guard.reader(cwd, web=web, private=guard.PRIVATE if own is not None else ()),
-            schema=prompts.PLAN_SCHEMA,
+            schema=schema,
             max_turns=self.settings.plan_max_turns,
             timeout_s=self.settings.plan_timeout_s,
-            asked=True,
+            asked=asked,
         )
-        if result is None:
+        return result, project
+
+    # ------------------------------------------------------------------ planning the rest again
+
+    def _may_replan(self, objective: Objective) -> bool:
+        return objective.open and objective.replans < MAX_REPLANS and any(s.status == FAILED for s in objective.steps)
+
+    async def _replan(self, objective: Objective) -> bool:
+        """A step failed and nothing is running: plan what's left again, with everything that happened known. True
+        when new steps took over (the failed step, and what was still to come, stay on the record as replaced);
+        False when the planner had nothing better, or it can't go on without the user (``blocked_on``)."""
+        objective.replans += 1
+        self._save()
+        verified = sum(1 for s in objective.live_steps if s.status == VERIFIED)
+        first = max((s.id for s in objective.steps), default=0) + 1
+        prompt = prompts.replan_prompt(
+            objective.goal,
+            objective.project,
+            f"{self._clock():%A %B %d, %Y, %H:%M}",
+            self._so_far(objective),
+            first=first,
+            room=max(1, MAX_STEPS - verified),
+            known=self._known(objective),
+            said="\n".join(objective.notes[-2:]),
+        )
+        try:
+            result, project = await self._planning_session(objective, prompt, prompts.REPLAN_SCHEMA, asked=False)
+        except asyncio.CancelledError:
+            objective.replans -= 1  # cut off (a restart), not used up
+            raise
+        if result is None or not result.ok or result.data is None:
+            log.info(
+                "Objective #%s: planning the rest again came to nothing (%s)", objective.id, result and result.error
+            )
             return False
-        if not result.ok or result.data is None:
-            objective.status = OBJECTIVE_FAILED
-            objective.error = f"I couldn't plan it: {result.error or 'the planner gave no plan'}"
-            return False
-        error = apply_plan(
+        error = apply_replan(
             objective,
             result.data,
+            first=first,
+            room=max(1, MAX_STEPS - verified),
             coding=project is not None and project.has_commits,
             self_work=self._self_work(objective),
         )
-        if error:
-            objective.status, objective.error = OBJECTIVE_FAILED, f"I couldn't plan it: {error}"
-            return False
-        objective.status = WORKING
         self._save()
-        log.info("Objective #%s planned: %d steps", objective.id, len(objective.steps))
+        if error:
+            log.info("Objective #%s: the new plan was unusable (%s)", objective.id, error)
+            return False
+        if objective.blocked_on:
+            log.info("Objective #%s can't go on without the user: %s", objective.id, objective.blocked_on)
+            return False
+        for step in objective.steps:  # a replaced change to her that was still building goes, like a cancelled one
+            if step.status == REPLACED and step.kind == SELF and step.improvement is not None and not step.commit:
+                if self.improvements is not None and not step.awaiting_install:
+                    with contextlib.suppress(Exception):
+                        await self.improvements.reject(step.improvement)
+        new_code = any(s.kind == CODE and s.id >= first for s in objective.steps)
+        if new_code and not objective.worktree:  # the first plan had no code, so nothing was set up for it
+            if why := await self._ready_for_code(objective, False):
+                for step in objective.steps:
+                    if step.id >= first:
+                        self._fail(step, f"The code couldn't be set up: {why}")
+                return False
+        log.info("Objective #%s planned again from step %d (%d new steps)", objective.id, first, len(objective.steps))
         return True
+
+    def _so_far(self, objective: Objective) -> str:
+        """The ledger as the planner reads it: every step and how it ended."""
+        lines = []
+        for s in objective.steps:
+            line = f"Step {s.id} ({s.kind}) “{s.title}”: {s.status}."
+            if s.status == VERIFIED:
+                line += f" Result: {' '.join(s.result.split())[:300]}" if s.result else ""
+            elif s.problem:
+                line += f" Why: {' '.join(s.problem.split())[:500]}"
+            elif s.status == PENDING:
+                line += f" Not started. It was to: {' '.join(s.instruction.split())[:200]}"
+            lines.append(line)
+        lines += [f"Then it stopped because it needed the user: {was}" for was in objective.blocked_before]
+        return "\n".join(lines)
+
+    def _known(self, objective: Objective) -> str:
+        """What earlier objectives about the same things ran into: their failed steps' problems and what they needed
+        from the user. By shared words in the goals and titles (two at least), the closest three. Words most of her
+        objectives share don't count: the ones she starts overnight are worded alike ("a brief for ...", the course's
+        name), and on her record to 2026-11-25 that alone matched an assignment's brief to a midterm's review sheet."""
+        every = [_words(f"{o.goal} {o.title}") for o in self.store.objectives]
+        usual = {w for w in set().union(*every) if sum(w in words for words in every) > max(3, len(every) // 5)}
+        mine = _words(f"{objective.goal} {objective.title}") - usual
+        found: list[tuple[int, int, str]] = []
+        for other in self.store.objectives:
+            if other.id == objective.id or other.project_path != objective.project_path:
+                continue  # another project's troubles (or her own code's) aren't this one's to be told
+            hit = [
+                f"“{s.title}” failed: {' '.join(s.problem.split())[:300]}"
+                for s in other.steps
+                if s.status in (FAILED, REPLACED) and s.problem and not s.problem.startswith(_NOT_ITS_OWN)
+            ]
+            hit += [f"it needed the user: {need}" for need in [*other.blocked_before, other.blocked_on] if need]
+            shared = len(mine & _words(f"{other.goal} {other.title}"))
+            if hit and shared >= 2:
+                when = (other.created or "")[:10]
+                found.append(
+                    (shared, other.id, f"Objective #{other.id} “{other.title}” ({when}): " + "; ".join(hit[:2]))
+                )
+        found.sort(reverse=True)
+        return "\n".join(text for _, _, text in found[:3])
+
+    # ------------------------------------------------------------------ taking one up again
+
+    def take_up(self, objective: Objective, said: str = "") -> None:
+        """Go on with an objective that ended short of its goal (unfinished, or blocked on the user): the rest is
+        planned again from what's on the record, with what the user ``said`` since. RuntimeError with why not."""
+        if self._closing:
+            raise RuntimeError("I'm shutting down")
+        if objective.status not in RESUMABLE:
+            raise RuntimeError(
+                "it's still under way" if objective.open else f"it ended as {objective.status}, with nothing left open"
+            )
+        if objective.merged:
+            raise RuntimeError("its code is already merged; start a new objective for what's left")
+        if objective.resumes >= MAX_RESUMES:
+            raise RuntimeError(f"it has been taken up {MAX_RESUMES} times already; start a new objective instead")
+        open_now = [o for o in self.store.objectives if o.open]
+        if len(open_now) >= self.settings.max_open:
+            raise RuntimeError(f"{len(open_now)} objectives are already under way (at most {self.settings.max_open})")
+        if objective.branch and not (objective.worktree and Path(objective.worktree).is_dir()):
+            # Setting the folder up again would start the branch over, without the verified commits on it.
+            raise RuntimeError("its work folder is gone, so its branch can't be carried on; start a new objective")
+        objective.resumes += 1
+        if objective.blocked_on:  # onto the record: it's what the user is answering now
+            objective.blocked_before.append(objective.blocked_on)
+            objective.blocked_on = ""
+        objective.origin = "user"  # theirs now, whoever started it: told when it ends, on their budget
+        if said.strip():
+            objective.notes.append(" ".join(said.split())[:1000])
+        live = [s for s in objective.live_steps if s.status != VERIFIED]
+        if live and not any(s.status == FAILED for s in live):
+            live[0].status = FAILED  # so the rest is planned again first thing
+            if live[0].problem.startswith(_NOT_ITS_OWN):
+                live[0].problem = "It never ran."
+        objective.status, objective.finished, objective.ended_at = WORKING, None, None
+        objective.reported, objective.waiting = False, ""
+        objective.replans = min(objective.replans, MAX_REPLANS - 1)  # one more plan, whatever was used before
+        self._save()
+        log.info("Objective #%s (%s) taken up again", objective.id, objective.title)
+        self._spawn(objective, resumed=True)
 
     # ------------------------------------------------------------------ the branch
 
@@ -1049,32 +1224,9 @@ def apply_plan(objective: Objective, data: dict[str, Any], *, coding: bool, self
     raw = data.get("steps")
     if not isinstance(raw, list) or not raw:
         return "the plan had no steps"
-    steps: list[Step] = []
-    for number, item in enumerate(raw[:MAX_STEPS], start=1):
-        if not isinstance(item, dict):
-            return f"step {number} wasn't readable"
-        kind = str(item.get("kind") or "")
-        if kind not in KINDS:
-            return f"step {number} has an unknown kind ({kind!r})"
-        if kind == CODE and not coding:
-            return "it needs code changes, but there's no project with commits to make them in"
-        if kind == SELF and not self_work:
-            return "it needs a change to me, but my self-improvement is off"
-        title = " ".join(str(item.get("title") or "").split())[:80]
-        instruction = str(item.get("instruction") or "").strip()
-        acceptance = str(item.get("acceptance") or "").strip()
-        if not title or not instruction or not acceptance:
-            return f"step {number} is missing its title, instruction or acceptance criteria"
-        deps = []
-        for dep in item.get("depends_on") or []:
-            try:
-                dep = int(dep)
-            except (TypeError, ValueError):
-                return f"step {number} depends on something that isn't a step number"
-            if not 1 <= dep < number:
-                return f"step {number} depends on step {dep}, which doesn't come before it"
-            deps.append(dep)
-        steps.append(Step(number, title, kind, instruction[:4000], acceptance[:2000], sorted(set(deps))))
+    steps, error = _read_steps(raw[:MAX_STEPS], 1, set(), coding=coding, self_work=self_work)
+    if error:
+        return error
     title = " ".join(str(data.get("title") or "").split())[:60]
     objective.title = title or objective.title
     objective.approach = str(data.get("approach") or "").strip()[:600]
@@ -1085,6 +1237,99 @@ def apply_plan(objective: Objective, data: dict[str, Any], *, coding: bool, self
     objective.not_doing = not_doing
     objective.steps = steps
     return None
+
+
+def apply_replan(
+    objective: Objective, data: dict[str, Any], *, first: int, room: int, coding: bool, self_work: bool = False
+) -> str | None:
+    """Put the planner's new plan for the rest on the objective; why it's unusable otherwise.
+
+    With steps: every step that isn't verified is kept as ``replaced`` (the record of what was tried), and the new
+    ones follow, numbered from ``first``. With none and a ``blocked_on``: nothing changes but that, and the objective
+    ends blocked on the user."""
+    blocked = " ".join(str(data.get("blocked_on") or "").split())[:400]
+    approach = str(data.get("approach") or "").strip()[:600]
+    raw = data.get("steps")
+    if not isinstance(raw, list) or not raw:
+        if not blocked:
+            return "the new plan had no steps"
+        objective.blocked_on = blocked
+        return None
+    verified = {s.id for s in objective.steps if s.status == VERIFIED}
+    steps, error = _read_steps(raw[:room], first, verified, coding=coding, self_work=self_work)
+    if error:
+        return error
+    for step in objective.steps:
+        if step.status not in (VERIFIED, REPLACED, CANCELLED):
+            step.problem = step.problem or "Not reached: the plan changed after an earlier step failed."
+            step.status, step.activity = REPLACED, ""
+    objective.steps = [*objective.steps, *steps]
+    objective.approach = approach or objective.approach
+    objective.blocked_on = ""
+    if blocked:  # the rest goes on; this part is left for the user
+        objective.not_doing = f"{objective.not_doing} Left for you: {blocked}".strip()[:900]
+    return None
+
+
+def _read_steps(
+    raw: list[Any], first: int, earlier: set[int], *, coding: bool, self_work: bool
+) -> tuple[list[Step], str | None]:
+    """The planner's steps, numbered from ``first``; each may depend on the ones before it in ``raw`` and on
+    ``earlier`` (verified steps already on the objective)."""
+    steps: list[Step] = []
+    for number, item in enumerate(raw, start=first):
+        problem = _read_step(steps, number, item, first, earlier, coding=coding, self_work=self_work)
+        if problem:
+            return [], problem
+    return steps, None
+
+
+def _read_step(
+    steps: list[Step], number: int, item: Any, first: int, earlier: set[int], *, coding: bool, self_work: bool
+) -> str | None:
+    if not isinstance(item, dict):
+        return f"step {number} wasn't readable"
+    kind = str(item.get("kind") or "")
+    if kind not in KINDS:
+        return f"step {number} has an unknown kind ({kind!r})"
+    if kind == CODE and not coding:
+        return "it needs code changes, but there's no project with commits to make them in"
+    if kind == SELF and not self_work:
+        return "it needs a change to me, but my self-improvement is off"
+    title = " ".join(str(item.get("title") or "").split())[:80]
+    instruction = str(item.get("instruction") or "").strip()
+    acceptance = str(item.get("acceptance") or "").strip()
+    if not title or not instruction or not acceptance:
+        return f"step {number} is missing its title, instruction or acceptance criteria"
+    deps = []
+    for dep in item.get("depends_on") or []:
+        try:
+            dep = int(dep)
+        except (TypeError, ValueError):
+            return f"step {number} depends on something that isn't a step number"
+        if not (first <= dep < number or dep in earlier):
+            return f"step {number} depends on step {dep}, which doesn't come before it"
+        deps.append(dep)
+    steps.append(Step(number, title, kind, instruction[:4000], acceptance[:2000], sorted(set(deps))))
+    return None
+
+
+_WORD = re.compile(r"[a-z0-9]{2,}")
+_COMMON = frozenset(
+    "the and for you your with from that this what when where which will have has was were are not but its it's can "
+    "all any one out get got make made into about them then than also just more some how why who use using need "
+    "needs want wants of to on in at my an it is be we me up as or by so do if no report outline add fix test tests "
+    "write make create find list update check read new file files code project work done finish help look".split()
+)
+# A step that only fell with another, or to her own machinery, says nothing about the work.
+_NOT_ITS_OWN = (
+    "It needs step", "Not reached:", "It never ran.", "It was cut off by restarts", "something went wrong in my own",
+    "It could never start.", "The code couldn't be set up",
+)  # fmt: skip
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in _WORD.findall(text.casefold()) if w not in _COMMON}
 
 
 def _checks_evidence(run: CheckRun, baseline: str | None) -> str:
@@ -1106,14 +1351,29 @@ def ending(objective: Objective) -> tuple[str, str]:
     if objective.status == OBJECTIVE_FAILED:
         line = f"I couldn't get “{title}” going: {objective.error or 'something went wrong'}."
         return line, f"Objective #{objective.id} “{title}” failed: {objective.error}"
-    total = len(objective.steps)
-    verified = sum(1 for s in objective.steps if s.status == VERIFIED)
+    live = objective.live_steps
+    total = len(live)
+    verified = sum(1 for s in live if s.status == VERIFIED)
     code = objective.code_to_merge
+    again = ""
     if objective.status == DONE:
         passed = "it passed its checks" if total == 1 else f"all {total} steps passed their checks"
         line = f"I finished “{title}”: {passed}."
+        if objective.replans and any(s.status == REPLACED and s.attempts for s in objective.steps):
+            line += " I had to change the plan along the way, so objective_status has what I left out."
+    elif objective.status == BLOCKED:
+        line = (
+            f"I've stopped on “{title}” because I need something from you: {_lower(objective.blocked_on)} "
+            f"{verified} of {total} steps passed their checks so far. Tell me when that's sorted and I'll pick it up "
+            "from there."
+        )
+        again = (
+            f" It's blocked on the user: {objective.blocked_on} When they say it's sorted, or how to get around it, "
+            "resume_objective picks it up from what's done, with what they said."
+        )
     else:
-        failed = [s for s in objective.steps if s.status in (FAILED, SKIPPED)]
+        again = " If they want another go at what's left, resume_objective takes it up from what's on the record."
+        failed = [s for s in live if s.status in (FAILED, SKIPPED)]
         problem = spoken_summary(failed[0].problem, 160) if failed else ""
         why = f" The first one that didn't: {failed[0].title}, because {_lower(problem)}" if failed else ""
         line = f"I've done what I could on “{title}”: {verified} of {total} steps passed their checks.{why}"
@@ -1125,11 +1385,12 @@ def ending(objective: Objective) -> tuple[str, str]:
     note = f"Objective #{objective.id} “{title}” ended ({objective.status}). objective_status reads the details" + (
         "; merge_objective_work merges its verified code when the user says so." if code else "."
     )
+    note += again
     return line.strip(), note
 
 
 def _lower(text: str) -> str:
-    text = text.strip().rstrip(".")
+    text = text.strip().rstrip(".!?")
     return (text[:1].lower() + text[1:] if text[:2] != text[:2].upper() else text) + "."
 
 

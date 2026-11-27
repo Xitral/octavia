@@ -44,6 +44,7 @@ class ReleaseWatch:
         self.available: channel.Release | None = None
         self.told: str | None = None  # the version already announced
         self.error: str | None = None
+        self.items_changed: tuple[list[str], list[str]] = ([], [])  # (taken in, no longer in force) at the last look
 
     @property
     def usable(self) -> bool:
@@ -51,10 +52,19 @@ class ReleaseWatch:
 
     def check(self) -> channel.Release | None:
         try:
-            releases = channel.read(self.feed, self.public_key)
+            # Signed, and not older than one already trusted. What was learned that isn't code comes in (or is
+            # taken back) right here, whether or not there's an update to offer.
+            feed = channel.read_trusted(self.root, self.feed, self.public_key)
+            releases = feed.releases
+            self.items_changed = channel.sync_items(self.root, feed)
+            if any(self.items_changed):
+                log.info("Shared items: %s taken in, %s no longer in force", *self.items_changed)
         except (channel.UpdateError, signing.SignatureError, OSError, ValueError) as exc:
             self.error = str(exc)
             log.info("Update check: %s", exc)
+            if isinstance(exc, channel.StaleFeed) and channel.clear_items(self.root):
+                # What it was given by a feed it can no longer check on is taken out, not kept on trust.
+                log.info("The feed is past its date: its shared items are out of the prompt until it's current again")
             return self.available
         except Exception as exc:  # a network error of httpx's, say: never her problem
             self.error = type(exc).__name__
@@ -161,7 +171,7 @@ def update(root: Path, wait_pids: list[int], relaunch: bool) -> dict[str, object
             raise channel.UpdateError("OCTAVIA didn't close in time")
         config = load_config(root=root)
         h = config.hive
-        release = channel.newer(channel.read(h.feed, h.public_key), before)
+        release = channel.newer(channel.read_trusted(root, h.feed, h.public_key).releases, before)
         if release is None:
             result.update(ok=True, to=before, message="already up to date")
         else:
